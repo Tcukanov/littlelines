@@ -123,7 +123,10 @@ class PlanBuilder:
             width = height = 0.0
 
         stitches = sum(1 for e in plan.events if e[0] == CMD_STITCH)
-        jumps = sum(1 for e in plan.events if e[0] == CMD_JUMP)
+        # Count jump MOVES (a long move split into hops is one machine stop).
+        jumps = sum(1 for i, e in enumerate(plan.events)
+                    if e[0] == CMD_JUMP
+                    and (i == 0 or plan.events[i - 1][0] != CMD_JUMP))
         trims = sum(1 for e in plan.events if e[0] == CMD_TRIM)
         changes = sum(1 for e in plan.events if e[0] == CMD_COLOR_CHANGE)
         # Realistic machine time: jumps and trims dominate stroke-heavy
@@ -154,7 +157,9 @@ class PlanBuilder:
         if stitches > 120000:
             warnings.append(f"Very high stitch count ({stitches:,}); consider "
                             "a smaller size or lower density.")
-        jumps = sum(1 for e in plan.events if e[0] == CMD_JUMP)
+        jumps = sum(1 for i, e in enumerate(plan.events)
+                    if e[0] == CMD_JUMP
+                    and (i == 0 or plan.events[i - 1][0] != CMD_JUMP))
         trims = sum(1 for e in plan.events if e[0] == CMD_TRIM)
         if not self.trim_enabled and jumps > 30:
             warnings.append(

@@ -174,22 +174,23 @@ def _digitize_line_art(builder: PlanBuilder, rgb, fg, s: Settings,
     color = rgb[mask > 0].mean(axis=0)
     builder.start_color(_hex(tuple(color)))
 
-    paths = lineart.centerline_paths(mask, min_len_px=max(3.0, 1.5 / mm_per_px))
-    paths = lineart.order_paths(paths)
-    paths = lineart.merge_ordered(paths, 0.9 / max(mm_per_px, 1e-9))
-    for pts_px, widths_px in paths:
+    # Keep even tiny stub paths: dropping them severs the stroke graph at
+    # junctions and turns one continuous walk into dozens of jumps.
+    paths = lineart.centerline_paths(mask, min_len_px=2.0)
+    walk = lineart.graph_walk(paths)
+    for pts_px, widths_px, retrace in walk:
         path_mm = pts_px * np.array([sx, sy])
         widths_mm = widths_px * mm_per_px
         mean_w = float(np.mean(widths_mm)) if len(widths_mm) else 0.0
-        if mean_w >= 1.0:
+        if retrace or mean_w < 1.0:
+            passes = 1 if retrace else max(1, s.line_passes - 1)
+            for run in fills.running_stitch(path_mm, s.stitch_len_mm, passes):
+                builder.add_run(run)
+        else:
             w_arr = np.clip(widths_mm + 2 * s.pull_comp_mm, 0.8,
                             s.satin_width_mm)
             run = _satin_run(path_mm, w_arr, s)
             if run is not None:
-                builder.add_run(run)
-        else:
-            for run in fills.running_stitch(path_mm, s.stitch_len_mm,
-                                            s.line_passes):
                 builder.add_run(run)
 
 
@@ -280,9 +281,7 @@ def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
         return
 
     if stitch == "satin":
-        paths = lineart.centerline_paths(r.mask)
-        paths = lineart.order_paths(paths)
-        paths = lineart.merge_ordered(paths, 0.9 / max(mm_per_px, 1e-9))
+        paths = lineart.centerline_paths(r.mask, min_len_px=2.0)
         # Satin can only cover up to the width cap; if the shape is locally
         # wider, zigzag would leave bare margins — use fill instead.
         all_w = np.concatenate([w for _, w in paths]) if paths else np.array([])
@@ -290,10 +289,15 @@ def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
                 s.satin_width_mm * 1.05:
             paths = []
         emitted = False
-        for pts_px, widths_px in paths:
+        for pts_px, widths_px, retrace in lineart.graph_walk(paths):
             path_mm = pts_px * np.array([sx, sy])
-            if fills.path_length(path_mm) < 1.2:
-                continue  # sub-millimeter nub, not worth a satin bead
+            if retrace or fills.path_length(path_mm) < 1.2:
+                # Travel back along the stitched branch (or a tiny nub):
+                # running stitch keeps the walk continuous, no jump.
+                for run in fills.running_stitch(path_mm, s.stitch_len_mm, 1):
+                    builder.add_run(run)
+                emitted = emitted or not retrace
+                continue
             w_arr = np.clip(widths_px * mm_per_px + 2 * s.pull_comp_mm,
                             0.8, s.satin_width_mm)
             run = _satin_run(path_mm, w_arr, s)

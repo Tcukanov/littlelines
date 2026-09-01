@@ -14,7 +14,8 @@ Pixel = Tuple[int, int]  # (x, y)
 
 
 def skeletonize(img: np.ndarray) -> np.ndarray:
-    """Zhang-Suen thinning, vectorized in NumPy (replaces scikit-image)."""
+    """Guo-Hall thinning, vectorized in NumPy (replaces scikit-image).
+    Chosen over Zhang-Suen, which leaves 2-px staircases on diagonals."""
     skel = (img > 0).astype(np.uint8)
     changed = True
     while changed:
@@ -29,17 +30,16 @@ def skeletonize(img: np.ndarray) -> np.ndarray:
             p7 = P[2:, :-2]
             p8 = P[1:-1, :-2]
             p9 = P[:-2, :-2]
-            ring = [p2, p3, p4, p5, p6, p7, p8, p9, p2]
-            B = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9
-            A = np.zeros_like(B)
-            for k in range(8):
-                A += (ring[k] == 0) & (ring[k + 1] == 1)
+            C = (((1 - p2) & (p3 | p4)) + ((1 - p4) & (p5 | p6))
+                 + ((1 - p6) & (p7 | p8)) + ((1 - p8) & (p9 | p2)))
+            N1 = (p9 | p2) + (p3 | p4) + (p5 | p6) + (p7 | p8)
+            N2 = (p2 | p3) + (p4 | p5) + (p6 | p7) + (p8 | p9)
+            N = np.minimum(N1, N2)
             if step == 0:
-                cond = ((skel == 1) & (B >= 2) & (B <= 6) & (A == 1)
-                        & (p2 * p4 * p6 == 0) & (p4 * p6 * p8 == 0))
+                m = (p6 | p7 | (1 - p9)) & p8
             else:
-                cond = ((skel == 1) & (B >= 2) & (B <= 6) & (A == 1)
-                        & (p2 * p4 * p8 == 0) & (p2 * p6 * p8 == 0))
+                m = (p2 | p3 | (1 - p5)) & p4
+            cond = (skel == 1) & (C == 1) & (N >= 2) & (N <= 3) & (m == 0)
             if cond.any():
                 skel[cond] = 0
                 changed = True
@@ -165,6 +165,72 @@ def order_paths(paths: List[Tuple[np.ndarray, np.ndarray]]
             p, w = p[::-1], w[::-1]
         ordered.append((p, w))
     return ordered
+
+
+def graph_walk(paths: List[Tuple[np.ndarray, np.ndarray]]
+               ) -> List[Tuple[np.ndarray, np.ndarray, bool]]:
+    """Traverse the stroke network like a commercial digitizer: DFS over the
+    graph of strokes, stitching each branch on first visit and traveling
+    back along it (retrace=True) when backtracking. The result is one
+    continuous polyline per connected component — jumps only remain
+    between separate components.
+
+    Returns [(pts, widths, retrace)] in stitching order.
+    """
+    if not paths:
+        return []
+
+    def key(p: np.ndarray) -> Tuple[int, int]:
+        return (int(round(p[0])), int(round(p[1])))
+
+    adj: Dict[Tuple[int, int], list] = {}
+    for eid, (pts, _) in enumerate(paths):
+        a, b = key(pts[0]), key(pts[-1])
+        adj.setdefault(a, []).append((eid, b, True))
+        adj.setdefault(b, []).append((eid, a, False))
+
+    used = [False] * len(paths)
+    out: List[Tuple[np.ndarray, np.ndarray, bool]] = []
+    seen = set()
+
+    for start in adj:
+        if start in seen:
+            continue
+        # frame: [node, next-edge-index, entry_eid, entry_forward]
+        stack = [[start, 0, None, None]]
+        seen.add(start)
+        while stack:
+            frame = stack[-1]
+            node, idx = frame[0], frame[1]
+            edges = adj[node]
+            advanced = False
+            while idx < len(edges):
+                eid, other, fwd = edges[idx]
+                idx += 1
+                if used[eid]:
+                    continue
+                used[eid] = True
+                frame[1] = idx
+                pts, w = paths[eid]
+                if fwd:
+                    out.append((pts, w, False))
+                else:
+                    out.append((pts[::-1], w[::-1], False))
+                seen.add(other)
+                stack.append([other, 0, eid, fwd])
+                advanced = True
+                break
+            if not advanced:
+                frame[1] = idx
+                stack.pop()
+                if frame[2] is not None:
+                    eid, fwd = frame[2], frame[3]
+                    pts, w = paths[eid]
+                    if fwd:
+                        out.append((pts[::-1], w[::-1], True))
+                    else:
+                        out.append((pts, w, True))
+    return out
 
 
 def merge_ordered(paths: List[Tuple[np.ndarray, np.ndarray]],
