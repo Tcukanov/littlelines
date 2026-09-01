@@ -179,8 +179,11 @@ def absorb_small_regions(label_map: np.ndarray, min_area_px: float,
                 m = (comp[y0:y1, x0:x1] == ci)
                 small = area < min_area_px
                 if not small:
-                    if area > 64 * min_area_px:
-                        continue  # clearly big enough, skip thickness test
+                    # Thin-sliver cull is for anti-aliasing fringe only; a
+                    # LARGE thin structure is real line art that stitches
+                    # fine as running stitch — never absorb it.
+                    if area > 8 * min_area_px:
+                        continue
                     dt = cv2.distanceTransform(m.astype(np.uint8),
                                                cv2.DIST_L2, 3)
                     inner = dt[m]
@@ -203,7 +206,12 @@ def absorb_small_regions(label_map: np.ndarray, min_area_px: float,
                     contrast = float(np.linalg.norm(
                         lab_palette[idx] - lab_palette[nb]))
                     if compact and contrast > 25.0:
-                        sub[m] = -1  # intentional detail -> keep as a hole
+                        if lab_palette[idx][0] > lab_palette[nb][0]:
+                            # Lighter detail in dark surround (eye sparkle):
+                            # keep as a hole, the fabric shows through.
+                            sub[m] = -1
+                        # Darker detail in light surround (a pupil): keep
+                        # its own color so it gets stitched.
                         changed = True
                         continue
                 sub[m] = nb

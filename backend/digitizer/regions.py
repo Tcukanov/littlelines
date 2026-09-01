@@ -17,6 +17,7 @@ class Region:
     max_thickness_px: float = 0.0    # 2 * max distance-transform value
     mean_thickness_px: float = 0.0
     p85_thickness_px: float = 0.0    # typical thickness, robust to one blob
+    bbox_px: float = 0.0             # longest bounding-box side
 
 
 def smooth_kernel(detail: int) -> int:
@@ -78,6 +79,7 @@ def regions_from_mask(mask: np.ndarray, min_area_px: float, detail: int,
             max_thickness_px=float(dt.max()) * 2.0,
             mean_thickness_px=float(inner.mean()) * 2.0,
             p85_thickness_px=float(np.percentile(inner, 85)) * 2.0,
+            bbox_px=float(max(xs.max() - xs.min(), ys.max() - ys.min()) + 1),
         ))
     return regions
 
@@ -92,8 +94,12 @@ def suggest_stitch(region: Region, mm_per_px: float,
     area_mm2 = region.area_px * mm_per_px * mm_per_px
     # length/width ratio: ~1 for compact blobs, >3 for stroke-like shapes.
     elongation = region.area_px / max(region.p85_thickness_px ** 2, 1.0)
-    if max_th <= 1.0 or area_mm2 < 3.0:
+    if max_th <= 1.0 or area_mm2 < 1.2:
         return "running"
+    # Small features (an eye, a pupil, a mouth) read best stitched solid:
+    # a satin ring around a tiny shape looks hollow and spidery on fabric.
+    if region.bbox_px * mm_per_px <= 6.0:
+        return "fill"
     # Satin only for genuinely stroke-like shapes; compact blobs look far
     # better as small tatami fills than as fat zigzag "beads". Allow a 25%
     # tolerance over the cap so lettering strokes don't get chopped up.
