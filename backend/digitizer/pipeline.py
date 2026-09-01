@@ -371,8 +371,10 @@ def _make_travel_router(mask: np.ndarray, sx: float, sy: float,
         b = snap(to_cell(b_mm))
         if a is None or b is None:
             return None
+        # A hidden route is preferable to a trim at almost any length; the
+        # cap only guards against absurd thread buildup.
         straight = float(np.hypot(b_mm[0] - a_mm[0], b_mm[1] - a_mm[1]))
-        max_len = min(160.0, straight * 5.0 + 10.0)
+        max_len = 400.0
         q = deque([a])
         parent = {a: None}
         found = False
