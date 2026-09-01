@@ -146,6 +146,72 @@ def _merge_close(centers: np.ndarray, threshold: float) -> np.ndarray:
     return np.array(centers, np.float32)
 
 
+def collapse_antialias_colors(label_map: np.ndarray, palette,
+                              rgb: np.ndarray, mm_per_px: float):
+    """Auto-merge anti-aliasing fringe colors into dominant ones.
+
+    A minor color (small share of the artwork) that is fringe-thin or lies
+    in Lab space between two dominant colors is an edge-smoothing artifact,
+    not a thread color. Its pixels get reassigned pixel-by-pixel to the
+    perceptually nearest dominant color. A small but SOLID accent color
+    (a red nose) matches neither test and survives."""
+    n = len(palette)
+    if n <= 2:
+        return label_map, palette
+    total = int((label_map >= 0).sum())
+    if total == 0:
+        return label_map, palette
+    counts = [int((label_map == i).sum()) for i in range(n)]
+    arr = np.array(palette, np.uint8).reshape(1, -1, 3)
+    lab_pal = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB).reshape(-1, 3) \
+        .astype(np.float32)
+
+    dominants = [i for i in range(n) if counts[i] / total >= 0.12]
+    if len(dominants) < 2:
+        dominants = sorted(range(n), key=lambda i: -counts[i])[:2]
+
+    aa = []
+    for i in range(n):
+        if i in dominants or counts[i] == 0:
+            continue
+        mask = (label_map == i).astype(np.uint8)
+        dtm = cv2.distanceTransform(mask, cv2.DIST_L2, 3)
+        mean_th = 2.0 * float(dtm[mask > 0].mean()) * mm_per_px
+        thin = mean_th < 0.8
+        between = False
+        for a in range(len(dominants)):
+            for b in range(a + 1, len(dominants)):
+                A = lab_pal[dominants[a]]
+                B = lab_pal[dominants[b]]
+                P = lab_pal[i]
+                AB = B - A
+                t = float(np.dot(P - A, AB)) / max(float(np.dot(AB, AB)),
+                                                   1e-9)
+                if 0.0 <= t <= 1.0 and \
+                        float(np.linalg.norm(P - (A + t * AB))) < 20.0:
+                    between = True
+        if thin or between:
+            aa.append(i)
+    if not aa:
+        return label_map, palette
+
+    lab_img = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
+    keep = [i for i in range(n) if i not in aa]
+    keep_lab = lab_pal[keep]
+    for i in aa:
+        sel = label_map == i
+        if not sel.any():
+            continue
+        px = lab_img[sel]
+        d = np.linalg.norm(px[:, None, :] - keep_lab[None, :, :], axis=2)
+        label_map[sel] = np.array(keep)[d.argmin(axis=1)]
+
+    out = np.full_like(label_map, -1)
+    for new_i, old_i in enumerate(keep):
+        out[label_map == old_i] = new_i
+    return out, [palette[i] for i in keep]
+
+
 def absorb_small_regions(label_map: np.ndarray, min_area_px: float,
                          min_thick_px: float,
                          palette=None, keep_px: float = 0.0) -> np.ndarray:

@@ -31,6 +31,8 @@ def analyze(data: bytes, settings: Settings) -> dict:
     sy = settings.height_mm / max(h, 1)
     mm_per_px = (sx + sy) / 2.0
     min_area_px = settings.min_object_mm2 / max(sx * sy, 1e-9)
+    label_map, palette = segmentation.collapse_antialias_colors(
+        label_map, palette, rgb, mm_per_px)
     label_map = segmentation.absorb_small_regions(
         label_map, min_area_px, 0.5 / max(mm_per_px, 1e-9),
         palette=palette, keep_px=0.5 / max(mm_per_px * mm_per_px, 1e-9))
@@ -82,6 +84,8 @@ def cleanup(data: bytes, settings: Settings) -> bytes:
     sy = settings.height_mm / max(h, 1)
     mm_per_px = (sx + sy) / 2.0
     min_area_px = settings.min_object_mm2 / max(sx * sy, 1e-9)
+    label_map, palette = segmentation.collapse_antialias_colors(
+        label_map, palette, rgb, mm_per_px)
     label_map = segmentation.absorb_small_regions(
         label_map, min_area_px, 0.5 / max(mm_per_px, 1e-9),
         palette=palette, keep_px=0.5 / max(mm_per_px * mm_per_px, 1e-9))
@@ -203,6 +207,8 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
                      sx: float, sy: float, mm_per_px: float) -> None:
     label_map, palette = segmentation.quantize(rgb, fg, s.max_colors)
     min_area_px = s.min_object_mm2 / max(sx * sy, 1e-9)
+    label_map, palette = segmentation.collapse_antialias_colors(
+        label_map, palette, rgb, mm_per_px)
     label_map = segmentation.absorb_small_regions(
         label_map, min_area_px, 0.5 / max(mm_per_px, 1e-9),
         palette=palette, keep_px=0.5 / max(mm_per_px * mm_per_px, 1e-9))
@@ -229,6 +235,30 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
         entries.append((idx, rgb_c, regs, cs, major, total_px))
 
     entries.sort(key=lambda e: (0 if e[4] == "fill" else 1, -e[5]))
+
+    # The base (largest) color drives merging and burying. Merge it FIRST,
+    # then classify: a body divided into cells by sketch lines looks
+    # stroke-like until the cells merge into one fill.
+    if entries:
+        entries.sort(key=lambda e: -e[5])  # largest pixel count first
+        idx0, rgb0, regs0, cs0, major0, cnt0 = entries[0]
+        mask0 = (label_map == idx0).astype(np.uint8)
+        r_px0 = max(1, int(round(1.4 / max(mm_per_px, 1e-9))))
+        kern0 = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (2 * r_px0 + 1, 2 * r_px0 + 1))
+        merged0 = (cv2.morphologyEx(mask0, cv2.MORPH_CLOSE, kern0)
+                   & (label_map >= 0).astype(np.uint8))
+        m_regs = regions.regions_from_mask(merged0, min_area_px, s.detail,
+                                           mm_per_px)
+        if m_regs and len(m_regs) <= max(1, len(regs0) // 2):
+            votes0: dict = {}
+            for r in m_regs:
+                sug = regions.suggest_stitch(r, mm_per_px, s.satin_width_mm)
+                votes0[sug] = votes0.get(sug, 0) + r.area_px
+            entries[0] = (idx0, rgb0, m_regs, cs0,
+                          max(votes0, key=votes0.get), cnt0)
+        entries[1:] = sorted(
+            entries[1:], key=lambda e: (0 if e[4] == "fill" else 1, -e[5]))
 
     # Fill colors may merge across thin gaps that a LATER color covers
     # (e.g. a body split into cells by sketch lines becomes ONE fill and
@@ -348,7 +378,9 @@ def _make_travel_router(mask: np.ndarray, sx: float, sy: float,
     from collections import deque
     # Half-resolution grid keeps BFS fast enough to route across the whole
     # design; dilating first keeps thin strokes connected after sampling.
+    # `strict` is the undilated footprint — the truly covered territory.
     grid = (cv2.dilate(mask, np.ones((5, 5), np.uint8)) > 0)[::2, ::2]
+    strict = (mask > 0)[::2, ::2]
     h, w = grid.shape
 
     def to_cell(p):
@@ -371,10 +403,7 @@ def _make_travel_router(mask: np.ndarray, sx: float, sy: float,
         b = snap(to_cell(b_mm))
         if a is None or b is None:
             return None
-        # A hidden route is preferable to a trim at almost any length; the
-        # cap only guards against absurd thread buildup.
         straight = float(np.hypot(b_mm[0] - a_mm[0], b_mm[1] - a_mm[1]))
-        max_len = 400.0
         q = deque([a])
         parent = {a: None}
         found = False
@@ -400,6 +429,16 @@ def _make_travel_router(mask: np.ndarray, sx: float, sy: float,
             cur = parent[cur]
         cells.reverse()
         path = np.array([[c[1] * sx * 2, c[0] * sy * 2] for c in cells])
+        # Coverage certainty controls how long a hidden route may be: a
+        # route fully on covered territory is allowed at any sane length;
+        # one that skirts edges gets the conservative cap.
+        coverage = float(np.mean([strict[c] for c in cells])) if cells else 0.0
+        if coverage >= 0.99:
+            max_len = 400.0
+        elif coverage >= 0.95:
+            max_len = 180.0
+        else:
+            max_len = max(80.0, straight * 2.0)
         if fills.path_length(path) > max_len:
             return None
         return fills.resample_path(path, min(stitch_len_mm, 2.5))
