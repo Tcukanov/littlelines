@@ -255,64 +255,100 @@ def _order_regions(regs, builder: PlanBuilder, sx: float, sy: float):
 
 def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
                    sx: float, sy: float, mm_per_px: float) -> None:
-    polys_mm = fills.contour_paths_mm(r.polys, sx, sy)
-
-    if stitch == "fill":
-        # Expand fills slightly under their neighbors so no fabric shows
-        # between adjacent colors (later colors stitch over the overlap).
-        overlap_px = max(1, int(round(0.35 / max(mm_per_px, 1e-6))))
-        kernel = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (2 * overlap_px + 1, 2 * overlap_px + 1))
-        dil = cv2.dilate(r.mask, kernel)
-        contours, _ = cv2.findContours(dil, cv2.RETR_CCOMP,
-                                       cv2.CHAIN_APPROX_SIMPLE)
-        expanded = []
-        for c in contours:
-            ap = cv2.approxPolyDP(c, 1.0, True).reshape(-1, 2)
-            if ap.shape[0] >= 3:
-                expanded.append(ap.astype(np.float64))
-        if expanded:
-            polys_mm = fills.contour_paths_mm(expanded, sx, sy)
-
     if stitch == "running":
+        polys_mm = fills.contour_paths_mm(r.polys, sx, sy)
         for poly in polys_mm:
             for run in fills.running_stitch(poly, s.stitch_len_mm, 1):
                 builder.add_run(run)
         return
 
     if stitch == "satin":
-        paths = lineart.centerline_paths(r.mask, min_len_px=2.0)
-        # Satin can only cover up to the width cap; if the shape is locally
-        # wider, zigzag would leave bare margins — use fill instead.
-        all_w = np.concatenate([w for _, w in paths]) if paths else np.array([])
-        if all_w.size and np.percentile(all_w * mm_per_px, 85) > \
-                s.satin_width_mm * 1.05:
-            paths = []
-        emitted = False
-        for pts_px, widths_px, retrace in lineart.graph_walk(paths):
-            path_mm = pts_px * np.array([sx, sy])
-            if retrace or fills.path_length(path_mm) < 1.2:
-                # Travel back along the stitched branch (or a tiny nub):
-                # running stitch keeps the walk continuous, no jump.
-                for run in fills.running_stitch(path_mm, s.stitch_len_mm, 1):
-                    builder.add_run(run)
-                emitted = emitted or not retrace
-                continue
-            w_arr = np.clip(widths_px * mm_per_px + 2 * s.pull_comp_mm,
-                            0.8, s.satin_width_mm)
-            run = _satin_run(path_mm, w_arr, s)
-            if run is not None:
-                builder.add_run(run)
-                emitted = True
-        if emitted:
+        # Hybrid split: parts of the shape too thick for satin (a shoe sole
+        # on an outline network) become fill; the thin strokes stay satin.
+        thin_mask, blob_mask = _split_thick_blobs(r.mask, s, mm_per_px)
+        if blob_mask is not None:
+            _fill_mask(builder, blob_mask, s, sx, sy, mm_per_px)
+        emitted = _satin_network(builder, thin_mask, s, sx, sy, mm_per_px)
+        if emitted or blob_mask is not None:
             return
         stitch = "fill"  # fallback when no usable centerline found
 
-    # Tatami fill. With auto angle, stitch along the shape's long axis —
-    # the per-region variation built-in machine patterns have.
+    if stitch == "fill":
+        _fill_mask(builder, r.mask, s, sx, sy, mm_per_px)
+
+
+def _split_thick_blobs(mask: np.ndarray, s: Settings, mm_per_px: float):
+    """Return (thin_mask, blob_mask|None): blobs = areas wider than the
+    satin cap, reconstructed from the distance-transform core."""
+    thr_px = (s.satin_width_mm / 2.0) / max(mm_per_px, 1e-9)
+    dt = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+    core = (dt > thr_px * 1.15).astype(np.uint8)
+    if not core.any():
+        return mask, None
+    k = 2 * int(round(thr_px * 1.15)) + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    blob = cv2.dilate(core, kernel) & mask
+    min_blob_px = 12.0 / max(mm_per_px * mm_per_px, 1e-9)  # >= 12 mm^2
+    n, comp, stats, _ = cv2.connectedComponentsWithStats(blob, 8)
+    keep = np.zeros_like(blob)
+    for ci in range(1, n):
+        if stats[ci][4] >= min_blob_px:
+            keep[comp == ci] = 1
+    if not keep.any():
+        return mask, None
+    thin = mask.copy()
+    thin[keep > 0] = 0
+    return thin, keep
+
+
+def _satin_network(builder: PlanBuilder, mask: np.ndarray, s: Settings,
+                   sx: float, sy: float, mm_per_px: float) -> bool:
+    """Centerline satin over a stroke network via continuous graph walk."""
+    if mask.sum() == 0:
+        return False
+    paths = lineart.centerline_paths(mask, min_len_px=2.0)
+    emitted = False
+    for pts_px, widths_px, retrace in lineart.graph_walk(paths):
+        path_mm = pts_px * np.array([sx, sy])
+        if retrace or fills.path_length(path_mm) < 1.2:
+            # Travel back along the stitched branch (or a tiny nub):
+            # running stitch keeps the walk continuous, no jump.
+            for run in fills.running_stitch(path_mm, s.stitch_len_mm, 1):
+                builder.add_run(run)
+            emitted = emitted or not retrace
+            continue
+        w_arr = np.clip(widths_px * mm_per_px + 2 * s.pull_comp_mm,
+                        0.8, s.satin_width_mm)
+        run = _satin_run(path_mm, w_arr, s)
+        if run is not None:
+            builder.add_run(run)
+            emitted = True
+    return emitted
+
+
+def _fill_mask(builder: PlanBuilder, mask: np.ndarray, s: Settings,
+               sx: float, sy: float, mm_per_px: float) -> None:
+    """Tatami-fill a mask: expand slightly under neighbors so no fabric
+    shows between adjacent colors, angle along the shape's long axis,
+    underlay first, then top stitching."""
+    overlap_px = max(1, int(round(0.35 / max(mm_per_px, 1e-6))))
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (2 * overlap_px + 1, 2 * overlap_px + 1))
+    dil = cv2.dilate(mask, kernel)
+    contours, _ = cv2.findContours(dil, cv2.RETR_CCOMP,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+    polys = []
+    for c in contours:
+        ap = cv2.approxPolyDP(c, 1.0, True).reshape(-1, 2)
+        if ap.shape[0] >= 3:
+            polys.append(ap.astype(np.float64))
+    if not polys:
+        return
+    polys_mm = fills.contour_paths_mm(polys, sx, sy)
+
     angle = s.fill_angle_deg
     if s.auto_fill_angle:
-        angle = _region_angle(r.mask, default=s.fill_angle_deg)
+        angle = _region_angle(mask, default=s.fill_angle_deg)
     if s.underlay:
         under = fills.scanline_fill(
             polys_mm, angle + 90.0, spacing=2.5,

@@ -16,6 +16,7 @@ class Region:
     centroid: Tuple[float, float] = (0.0, 0.0)
     max_thickness_px: float = 0.0    # 2 * max distance-transform value
     mean_thickness_px: float = 0.0
+    p85_thickness_px: float = 0.0    # typical thickness, robust to one blob
 
 
 def smooth_kernel(detail: int) -> int:
@@ -71,6 +72,7 @@ def extract_regions(label_map: np.ndarray, color_index: int,
             centroid=(float(xs.mean()), float(ys.mean())),
             max_thickness_px=float(dt.max()) * 2.0,
             mean_thickness_px=float(inner.mean()) * 2.0,
+            p85_thickness_px=float(np.percentile(inner, 85)) * 2.0,
         ))
     return regions
 
@@ -79,14 +81,16 @@ def suggest_stitch(region: Region, mm_per_px: float,
                    satin_max_mm: float) -> str:
     """Pick a sensible stitch type from shape geometry."""
     max_th = region.max_thickness_px * mm_per_px
+    # Judge by TYPICAL thickness: one thick blob (a shoe sole) must not
+    # force a whole connected outline network into fragmented fill.
+    typ_th = region.p85_thickness_px * mm_per_px
     area_mm2 = region.area_px * mm_per_px * mm_per_px
     # length/width ratio: ~1 for compact blobs, >3 for stroke-like shapes.
-    elongation = region.area_px / max(region.max_thickness_px ** 2, 1.0)
+    elongation = region.area_px / max(region.p85_thickness_px ** 2, 1.0)
     if max_th <= 1.0 or area_mm2 < 3.0:
         return "running"
     # Satin only for genuinely stroke-like shapes; compact blobs look far
-    # better as small tatami fills than as fat zigzag "beads". The shape
-    # must also fit inside the satin width cap, or coverage would fall short.
-    if max_th <= satin_max_mm and elongation >= 2.2:
+    # better as small tatami fills than as fat zigzag "beads".
+    if typ_th <= satin_max_mm and elongation >= 2.2:
         return "satin"
     return "fill"
