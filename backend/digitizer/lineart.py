@@ -9,9 +9,41 @@ from typing import Dict, List, Set, Tuple
 
 import cv2
 import numpy as np
-from skimage.morphology import skeletonize
 
 Pixel = Tuple[int, int]  # (x, y)
+
+
+def skeletonize(img: np.ndarray) -> np.ndarray:
+    """Zhang-Suen thinning, vectorized in NumPy (replaces scikit-image)."""
+    skel = (img > 0).astype(np.uint8)
+    changed = True
+    while changed:
+        changed = False
+        for step in (0, 1):
+            P = np.pad(skel, 1)
+            p2 = P[:-2, 1:-1]
+            p3 = P[:-2, 2:]
+            p4 = P[1:-1, 2:]
+            p5 = P[2:, 2:]
+            p6 = P[2:, 1:-1]
+            p7 = P[2:, :-2]
+            p8 = P[1:-1, :-2]
+            p9 = P[:-2, :-2]
+            ring = [p2, p3, p4, p5, p6, p7, p8, p9, p2]
+            B = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9
+            A = np.zeros_like(B)
+            for k in range(8):
+                A += (ring[k] == 0) & (ring[k + 1] == 1)
+            if step == 0:
+                cond = ((skel == 1) & (B >= 2) & (B <= 6) & (A == 1)
+                        & (p2 * p4 * p6 == 0) & (p4 * p6 * p8 == 0))
+            else:
+                cond = ((skel == 1) & (B >= 2) & (B <= 6) & (A == 1)
+                        & (p2 * p4 * p8 == 0) & (p2 * p6 * p8 == 0))
+            if cond.any():
+                skel[cond] = 0
+                changed = True
+    return skel.astype(bool)
 
 _NBRS = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
 

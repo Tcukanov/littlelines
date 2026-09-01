@@ -9,7 +9,7 @@ import json
 import os
 import re
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
@@ -50,6 +50,21 @@ def _settings(raw: str) -> Settings:
         return Settings.from_dict(json.loads(raw) if raw else {})
     except json.JSONDecodeError:
         raise HTTPException(400, "Invalid settings JSON.")
+
+
+@app.middleware("http")
+async def _restore_vercel_path(request: Request, call_next):
+    # On Vercel every request is rewritten to /api/index with the original
+    # path tucked into the __path query param — restore it before routing.
+    orig = request.query_params.get("__path")
+    if orig is not None and request.scope["path"].endswith("/api/index"):
+        request.scope["path"] = orig if orig.startswith("/") else "/" + orig
+    return await call_next(request)
+
+
+@app.get("/")
+async def root():
+    return {"service": "png-to-dst", "ok": True}
 
 
 @app.get("/api/health")

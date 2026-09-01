@@ -1,0 +1,11 @@
+{
+  "rewrites": [
+    { "source": "/:path*", "destination": "/api/index?__path=:path*" }
+  ],
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 60,
+      "memory": 3009
+    }
+  }
+}
