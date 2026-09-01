@@ -226,7 +226,29 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
 
     entries.sort(key=lambda e: (0 if e[4] == "fill" else 1, -e[5]))
 
+    # Fill colors may merge across thin gaps that a LATER color covers
+    # (e.g. a body split into cells by sketch lines becomes ONE fill and
+    # the lines stitch on top) — never across bare background.
+    occupied = (label_map >= 0).astype(np.uint8)
+    stitched = np.zeros_like(occupied)
+
     for idx, rgb_c, regs, cs, major, _ in entries:
+        color_mask = (label_map == idx).astype(np.uint8)
+        effective = cs.stitch if cs is not None and cs.stitch != "auto" \
+            else major
+        if effective == "fill":
+            r_px = max(1, int(round(1.4 / max(mm_per_px, 1e-9))))
+            kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (2 * r_px + 1, 2 * r_px + 1))
+            closed = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel)
+            allowed = color_mask | (occupied & (1 - stitched))
+            merged = (closed & allowed).astype(np.uint8)
+            merged_regs = regions.regions_from_mask(
+                merged, min_area_px, s.detail, mm_per_px)
+            if merged_regs:
+                regs = merged_regs
+        stitched |= color_mask
+
         builder.start_color(_hex(rgb_c))
         regs = _order_regions(regs, builder, sx, sy)
         for r in regs:
@@ -262,14 +284,23 @@ def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
                 builder.add_run(run)
         return
 
-    if stitch == "satin":
-        # Hybrid split: parts of the shape too thick for satin (a shoe sole
-        # on an outline network) become fill; the thin strokes stay satin.
-        thin_mask, blob_mask = _split_thick_blobs(r.mask, s, mm_per_px)
-        if blob_mask is not None:
+    # Universal hybrid split: thick parts (wider than the satin cap) become
+    # fill, thin strokes become satin — regardless of how the whole region
+    # classified. A shoe sole on an outline network gets fill while the
+    # outline stays one continuous satin walk, and vice versa.
+    thin_mask, blob_mask = _split_thick_blobs(r.mask, s, mm_per_px)
+    if blob_mask is not None:
+        thin_area_mm2 = float(thin_mask.sum()) * mm_per_px * mm_per_px
+        if thin_area_mm2 < 10.0:
+            # Essentially a solid shape with edge fuzz: plain fill.
+            _fill_mask(builder, r.mask, s, sx, sy, mm_per_px)
+        else:
             _fill_mask(builder, blob_mask, s, sx, sy, mm_per_px)
-        emitted = _satin_network(builder, thin_mask, s, sx, sy, mm_per_px)
-        if emitted or blob_mask is not None:
+            _satin_network(builder, thin_mask, s, sx, sy, mm_per_px)
+        return
+
+    if stitch == "satin":
+        if _satin_network(builder, r.mask, s, sx, sy, mm_per_px):
             return
         stitch = "fill"  # fallback when no usable centerline found
 
@@ -282,10 +313,12 @@ def _split_thick_blobs(mask: np.ndarray, s: Settings, mm_per_px: float):
     satin cap, reconstructed from the distance-transform core."""
     thr_px = (s.satin_width_mm / 2.0) / max(mm_per_px, 1e-9)
     dt = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
-    core = (dt > thr_px * 1.15).astype(np.uint8)
+    core = (dt > thr_px * 1.3).astype(np.uint8)
     if not core.any():
         return mask, None
-    k = 2 * int(round(thr_px * 1.15)) + 1
+    # Reconstruct with a radius >= the core threshold so a solid shape
+    # comes back whole (no leftover rim ring to satin separately).
+    k = 2 * int(round(thr_px * 1.3)) + 3
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
     blob = cv2.dilate(core, kernel) & mask
     min_blob_px = 12.0 / max(mm_per_px * mm_per_px, 1e-9)  # >= 12 mm^2

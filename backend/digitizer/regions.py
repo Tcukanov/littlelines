@@ -42,6 +42,11 @@ def extract_regions(label_map: np.ndarray, color_index: int,
                     min_area_px: float, detail: int,
                     mm_per_px: float = 0.0) -> List[Region]:
     mask = (label_map == color_index).astype(np.uint8)
+    return regions_from_mask(mask, min_area_px, detail, mm_per_px)
+
+
+def regions_from_mask(mask: np.ndarray, min_area_px: float, detail: int,
+                      mm_per_px: float = 0.0) -> List[Region]:
     mask = clean_mask(mask, detail)
     n, comp = cv2.connectedComponents(mask, connectivity=8)
     regions: List[Region] = []
@@ -90,7 +95,8 @@ def suggest_stitch(region: Region, mm_per_px: float,
     if max_th <= 1.0 or area_mm2 < 3.0:
         return "running"
     # Satin only for genuinely stroke-like shapes; compact blobs look far
-    # better as small tatami fills than as fat zigzag "beads".
-    if typ_th <= satin_max_mm and elongation >= 2.2:
+    # better as small tatami fills than as fat zigzag "beads". Allow a 25%
+    # tolerance over the cap so lettering strokes don't get chopped up.
+    if typ_th <= satin_max_mm * 1.25 and elongation >= 2.2:
         return "satin"
     return "fill"

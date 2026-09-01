@@ -41,7 +41,7 @@ class Settings:
     # Stitch settings
     density_mm: float = 0.40    # row/zigzag spacing
     stitch_len_mm: float = 3.0
-    satin_width_mm: float = 2.5  # max satin width
+    satin_width_mm: float = 3.5  # max satin width
     fill_angle_deg: float = 45.0
     auto_fill_angle: bool = True  # per-shape angle along its long axis
     underlay: bool = True
@@ -71,7 +71,7 @@ class Settings:
         s.remove_background = _b(d, "remove_background", True)
         s.density_mm = _f(d, "density_mm", 0.40, 0.25, 1.0)
         s.stitch_len_mm = _f(d, "stitch_len_mm", 3.0, 1.0, 7.0)
-        s.satin_width_mm = _f(d, "satin_width_mm", 2.5, 1.0, 7.0)
+        s.satin_width_mm = _f(d, "satin_width_mm", 3.5, 1.0, 7.0)
         s.fill_angle_deg = _f(d, "fill_angle_deg", 45.0, 0.0, 180.0)
         s.auto_fill_angle = _b(d, "auto_fill_angle", True)
         s.underlay = _b(d, "underlay", True)

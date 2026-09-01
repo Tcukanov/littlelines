@@ -51,7 +51,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   remove_background: true,
   density_mm: 0.4,
   stitch_len_mm: 3,
-  satin_width_mm: 2.5,
+  satin_width_mm: 3.5,
   fill_angle_deg: 45,
   auto_fill_angle: true,
   underlay: true,
