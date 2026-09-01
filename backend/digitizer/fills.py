@@ -232,8 +232,31 @@ def scanline_fill(polys: Sequence[Path], angle_deg: float, spacing: float,
                                    phase=(ri % 4) / 4.0))
         runs.append(np.array(pts))
 
+    # Order chains nearest-first (flipping when it helps) so hops between
+    # them are short instead of scan-order leaps across the shape.
+    ordered: List[Path] = []
+    pos: Optional[np.ndarray] = None
+    remaining = [np.array(r) for r in runs if len(r) >= 2]
+    while remaining:
+        if pos is None:
+            run = remaining.pop(0)
+        else:
+            best, best_d, best_flip = 0, float("inf"), False
+            for i, rr in enumerate(remaining):
+                d0 = float(np.linalg.norm(rr[0] - pos))
+                d1 = float(np.linalg.norm(rr[-1] - pos))
+                if d0 < best_d:
+                    best, best_d, best_flip = i, d0, False
+                if d1 < best_d:
+                    best, best_d, best_flip = i, d1, True
+            run = remaining.pop(best)
+            if best_flip:
+                run = run[::-1]
+        ordered.append(run)
+        pos = run[-1]
+
     # Rotate back to design space.
-    return [dedupe(r @ Rinv.T, 0.08) for r in runs if len(r) >= 2]
+    return [dedupe(r @ Rinv.T, 0.08) for r in ordered]
 
 
 def _sample_row(x_entry: float, x_exit: float, y: float, stitch_len: float,

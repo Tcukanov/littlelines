@@ -284,19 +284,18 @@ def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
                 builder.add_run(run)
         return
 
-    # Universal hybrid split: thick parts (wider than the satin cap) become
-    # fill, thin strokes become satin — regardless of how the whole region
-    # classified. A shoe sole on an outline network gets fill while the
-    # outline stays one continuous satin walk, and vice versa.
+    # Hybrid split: only for STROKE-DOMINATED shapes (an outline network
+    # with a few thick blobs). A merged fill body must stay one fill — its
+    # narrow leftovers are not strokes to satin, they're part of the fill.
     thin_mask, blob_mask = _split_thick_blobs(r.mask, s, mm_per_px)
     if blob_mask is not None:
+        thin_frac = float(thin_mask.sum()) / max(float(r.mask.sum()), 1.0)
         thin_area_mm2 = float(thin_mask.sum()) * mm_per_px * mm_per_px
-        if thin_area_mm2 < 10.0:
-            # Essentially a solid shape with edge fuzz: plain fill.
-            _fill_mask(builder, r.mask, s, sx, sy, mm_per_px)
-        else:
+        if thin_frac >= 0.35 and thin_area_mm2 >= 10.0:
             _fill_mask(builder, blob_mask, s, sx, sy, mm_per_px)
             _satin_network(builder, thin_mask, s, sx, sy, mm_per_px)
+        else:
+            _fill_mask(builder, r.mask, s, sx, sy, mm_per_px)
         return
 
     if stitch == "satin":
@@ -331,6 +330,12 @@ def _split_thick_blobs(mask: np.ndarray, s: Settings, mm_per_px: float):
         return mask, None
     thin = mask.copy()
     thin[keep > 0] = 0
+    # Drop crumbs too small to stitch as strokes (blob edges cover them).
+    min_crumb_px = 4.0 / max(mm_per_px * mm_per_px, 1e-9)
+    n2, comp2, stats2, _ = cv2.connectedComponentsWithStats(thin, 8)
+    for ci in range(1, n2):
+        if stats2[ci][4] < min_crumb_px:
+            thin[comp2 == ci] = 0
     return thin, keep
 
 
@@ -382,17 +387,26 @@ def _fill_mask(builder: PlanBuilder, mask: np.ndarray, s: Settings,
     angle = s.fill_angle_deg
     if s.auto_fill_angle:
         angle = _region_angle(mask, default=s.fill_angle_deg)
-    if s.underlay:
-        under = fills.scanline_fill(
-            polys_mm, angle + 90.0, spacing=2.5,
-            stitch_len=3.5, pull_comp=0.0, inset=0.4)
-        for run in under:
+    # Within ONE fill region, short hops (around interior holes) may drag
+    # thread instead of trimming: the holes belong to other colors that
+    # stitch on top, so the drag ends up covered — commercial files do the
+    # same. Long hops still trim.
+    saved_threshold = builder.trim_threshold
+    builder.trim_threshold = max(saved_threshold, 10.0)
+    try:
+        if s.underlay:
+            under = fills.scanline_fill(
+                polys_mm, angle + 90.0, spacing=2.5,
+                stitch_len=3.5, pull_comp=0.0, inset=0.4)
+            for run in under:
+                builder.add_run(run)
+        top = fills.scanline_fill(
+            polys_mm, angle, spacing=s.density_mm,
+            stitch_len=s.stitch_len_mm, pull_comp=s.pull_comp_mm)
+        for run in top:
             builder.add_run(run)
-    top = fills.scanline_fill(
-        polys_mm, angle, spacing=s.density_mm,
-        stitch_len=s.stitch_len_mm, pull_comp=s.pull_comp_mm)
-    for run in top:
-        builder.add_run(run)
+    finally:
+        builder.trim_threshold = saved_threshold
 
 
 def _region_angle(mask: np.ndarray, default: float) -> float:

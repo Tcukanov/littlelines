@@ -180,22 +180,38 @@ def graph_walk(paths: List[Tuple[np.ndarray, np.ndarray]]
     if not paths:
         return []
 
-    def key(p: np.ndarray) -> Tuple[int, int]:
-        return (int(round(p[0])), int(round(p[1])))
+    # Snap nearby endpoints to one node: skeleton junctions span 2-3 px,
+    # and paths attaching to different pixels of the same junction must
+    # still count as connected.
+    snap = 3.0
+    node_xy: List[Tuple[float, float]] = []
+    end_node: List[int] = []
+    for pts, _ in paths:
+        for p in (pts[0], pts[-1]):
+            found = -1
+            for i, q in enumerate(node_xy):
+                if abs(p[0] - q[0]) <= snap and abs(p[1] - q[1]) <= snap:
+                    found = i
+                    break
+            if found < 0:
+                node_xy.append((float(p[0]), float(p[1])))
+                found = len(node_xy) - 1
+            end_node.append(found)
 
-    adj: Dict[Tuple[int, int], list] = {}
-    for eid, (pts, _) in enumerate(paths):
-        a, b = key(pts[0]), key(pts[-1])
+    adj: Dict[int, list] = {}
+    for eid in range(len(paths)):
+        a, b = end_node[2 * eid], end_node[2 * eid + 1]
         adj.setdefault(a, []).append((eid, b, True))
         adj.setdefault(b, []).append((eid, a, False))
 
     used = [False] * len(paths)
-    out: List[Tuple[np.ndarray, np.ndarray, bool]] = []
     seen = set()
+    components: List[List[Tuple[np.ndarray, np.ndarray, bool]]] = []
 
     for start in adj:
         if start in seen:
             continue
+        segs: List[Tuple[np.ndarray, np.ndarray, bool]] = []
         # frame: [node, next-edge-index, entry_eid, entry_forward]
         stack = [[start, 0, None, None]]
         seen.add(start)
@@ -213,9 +229,9 @@ def graph_walk(paths: List[Tuple[np.ndarray, np.ndarray]]
                 frame[1] = idx
                 pts, w = paths[eid]
                 if fwd:
-                    out.append((pts, w, False))
+                    segs.append((pts, w, False))
                 else:
-                    out.append((pts[::-1], w[::-1], False))
+                    segs.append((pts[::-1], w[::-1], False))
                 seen.add(other)
                 stack.append([other, 0, eid, fwd])
                 advanced = True
@@ -227,9 +243,28 @@ def graph_walk(paths: List[Tuple[np.ndarray, np.ndarray]]
                     eid, fwd = frame[2], frame[3]
                     pts, w = paths[eid]
                     if fwd:
-                        out.append((pts[::-1], w[::-1], True))
+                        segs.append((pts[::-1], w[::-1], True))
                     else:
-                        out.append((pts, w, True))
+                        segs.append((pts, w, True))
+        if segs:
+            components.append(segs)
+
+    # Visit components nearest-first so hops between separate pieces stay
+    # short (arbitrary order was producing 50 mm jumps across the design).
+    out: List[Tuple[np.ndarray, np.ndarray, bool]] = []
+    pos = None
+    while components:
+        if pos is None:
+            comp = components.pop(0)
+        else:
+            best, best_d = 0, float("inf")
+            for i, c in enumerate(components):
+                d = float(np.linalg.norm(c[0][0][0] - pos))
+                if d < best_d:
+                    best, best_d = i, d
+            comp = components.pop(best)
+        out.extend(comp)
+        pos = comp[-1][0][-1]
     return out
 
 
