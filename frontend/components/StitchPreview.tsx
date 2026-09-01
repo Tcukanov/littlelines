@@ -316,10 +316,27 @@ export default function StitchPreview({ result }: Props) {
           (e.target as HTMLElement).setPointerCapture(e.pointerId);
         }}
         onPointerMove={(e) => {
-          if (!dragRef.current) return;
+          if (!dragRef.current) {
+            // Hover feedback: pointer cursor near a clickable stop marker.
+            const rect = (e.target as HTMLElement).getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+            const { scale, ox, oy } = viewRef.current;
+            let near = false;
+            for (const s of result.stops ?? []) {
+              if (
+                Math.hypot(ox + s.x * scale - mx, oy + s.y * scale - my) < 22
+              ) {
+                near = true;
+                break;
+              }
+            }
+            (e.target as HTMLElement).style.cursor = near ? "pointer" : "";
+            return;
+          }
           const dx = e.clientX - dragRef.current.x;
           const dy = e.clientY - dragRef.current.y;
-          if (Math.abs(dx) + Math.abs(dy) > 3) movedRef.current = true;
+          if (Math.abs(dx) + Math.abs(dy) > 8) movedRef.current = true;
           viewRef.current.ox += dx;
           viewRef.current.oy += dy;
           dragRef.current = { x: e.clientX, y: e.clientY };
@@ -334,7 +351,7 @@ export default function StitchPreview({ result }: Props) {
           const my = e.clientY - rect.top;
           const { scale, ox, oy } = viewRef.current;
           let best: StopInfo | null = null;
-          let bestD = 12;
+          let bestD = 22;
           for (const s of result.stops ?? []) {
             const d = Math.hypot(ox + s.x * scale - mx, oy + s.y * scale - my);
             if (d < bestD) {
