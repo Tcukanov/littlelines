@@ -78,8 +78,9 @@ def crop_to_foreground(rgb: np.ndarray, alpha: np.ndarray, fg: np.ndarray,
     return rgb[y0:y1, x0:x1], alpha[y0:y1, x0:x1], fg[y0:y1, x0:x1]
 
 
-def quantize(rgb: np.ndarray, fg: np.ndarray,
-             max_colors: int) -> Tuple[np.ndarray, List[Tuple[int, int, int]]]:
+def quantize(rgb: np.ndarray, fg: np.ndarray, max_colors: int,
+             palette_hint=None) -> Tuple[np.ndarray,
+                                         List[Tuple[int, int, int]]]:
     """Reduce artwork to at most max_colors colors.
 
     Clustering runs in Lab space (perceptual distance), so dark outlines
@@ -94,6 +95,32 @@ def quantize(rgb: np.ndarray, fg: np.ndarray,
     lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
     pts_lab = lab[fg]
     pts_rgb = rgb[fg].astype(np.float32)
+
+    if palette_hint:
+        # Authoritative palette (from an SVG): assign every pixel to the
+        # nearest declared color — no clustering, no fringe colors.
+        hint_rgb = np.array(
+            [[int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)]
+             for h in palette_hint], np.uint8)
+        hint_lab = cv2.cvtColor(hint_rgb.reshape(1, -1, 3),
+                                cv2.COLOR_RGB2LAB).reshape(-1, 3) \
+            .astype(np.float32)
+        d = np.linalg.norm(pts_lab[:, None, :] - hint_lab[None], axis=2)
+        assign = d.argmin(axis=1)
+        counts = np.bincount(assign, minlength=len(palette_hint))
+        keep = [i for i in range(len(palette_hint))
+                if counts[i] > 0.001 * len(assign)]
+        if keep:
+            keep_lab = hint_lab[keep]
+            d2 = np.linalg.norm(pts_lab[:, None, :] - keep_lab[None], axis=2)
+            assign2 = d2.argmin(axis=1)
+            counts2 = np.bincount(assign2, minlength=len(keep))
+            order = np.argsort(-counts2)
+            remap = np.empty(len(keep), np.int32)
+            remap[order] = np.arange(len(keep))
+            label_map[fg] = remap[assign2]
+            return label_map, [tuple(int(v) for v in hint_rgb[keep[i]])
+                               for i in order]
 
     uniq = np.unique(rgb[fg].reshape(-1, 3), axis=0)
     if uniq.shape[0] <= max_colors:

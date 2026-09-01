@@ -17,8 +17,9 @@ export default function UploadZone({ onFile, fileName, imageUrl }: Props) {
     (file: File | undefined) => {
       setError(null);
       if (!file) return;
-      if (!/image\/(png|jpe?g)/.test(file.type)) {
-        setError("Please choose a PNG or JPG image.");
+      if (!/image\/(png|jpe?g|svg\+xml)/.test(file.type) &&
+          !/\.svg$/i.test(file.name)) {
+        setError("Please choose a PNG, JPG or SVG image.");
         return;
       }
       onFile(file);
@@ -64,14 +65,14 @@ export default function UploadZone({ onFile, fileName, imageUrl }: Props) {
             </p>
             <p className="mt-1 text-sm text-gray-500">
               or click to browse — PNG with transparent background works best
-              (JPG is fine too)
+              (JPG and SVG work too)
             </p>
           </>
         )}
         <input
           ref={inputRef}
           type="file"
-          accept="image/png,image/jpeg"
+          accept="image/png,image/jpeg,image/svg+xml,.svg"
           className="hidden"
           onChange={(e) => accept(e.target.files?.[0])}
         />

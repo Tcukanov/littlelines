@@ -25,14 +25,16 @@ def analyze(data: bytes, settings: Settings) -> dict:
     fg = segmentation.foreground_mask(rgb, alpha, settings.remove_background)
     rgb, alpha, fg = segmentation.crop_to_foreground(rgb, alpha, fg)
     h, w = fg.shape
-    label_map, palette = segmentation.quantize(rgb, fg, settings.max_colors)
+    label_map, palette = segmentation.quantize(
+        rgb, fg, settings.max_colors, settings.palette_hint)
 
     sx = settings.width_mm / max(w, 1)
     sy = settings.height_mm / max(h, 1)
     mm_per_px = (sx + sy) / 2.0
     min_area_px = settings.min_object_mm2 / max(sx * sy, 1e-9)
-    label_map, palette = segmentation.collapse_antialias_colors(
-        label_map, palette, rgb, mm_per_px)
+    if not settings.palette_hint:
+        label_map, palette = segmentation.collapse_antialias_colors(
+            label_map, palette, rgb, mm_per_px)
     label_map = segmentation.absorb_small_regions(
         label_map, min_area_px, 0.5 / max(mm_per_px, 1e-9),
         palette=palette, keep_px=0.5 / max(mm_per_px * mm_per_px, 1e-9))
@@ -78,14 +80,16 @@ def cleanup(data: bytes, settings: Settings) -> bytes:
     fg = segmentation.foreground_mask(rgb, alpha, settings.remove_background)
     rgb, alpha, fg = segmentation.crop_to_foreground(rgb, alpha, fg)
     h, w = fg.shape
-    label_map, palette = segmentation.quantize(rgb, fg, settings.max_colors)
+    label_map, palette = segmentation.quantize(
+        rgb, fg, settings.max_colors, settings.palette_hint)
 
     sx = settings.width_mm / max(w, 1)
     sy = settings.height_mm / max(h, 1)
     mm_per_px = (sx + sy) / 2.0
     min_area_px = settings.min_object_mm2 / max(sx * sy, 1e-9)
-    label_map, palette = segmentation.collapse_antialias_colors(
-        label_map, palette, rgb, mm_per_px)
+    if not settings.palette_hint:
+        label_map, palette = segmentation.collapse_antialias_colors(
+            label_map, palette, rgb, mm_per_px)
     label_map = segmentation.absorb_small_regions(
         label_map, min_area_px, 0.5 / max(mm_per_px, 1e-9),
         palette=palette, keep_px=0.5 / max(mm_per_px * mm_per_px, 1e-9))
@@ -205,10 +209,12 @@ def _digitize_line_art(builder: PlanBuilder, rgb, fg, s: Settings,
 
 def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
                      sx: float, sy: float, mm_per_px: float) -> None:
-    label_map, palette = segmentation.quantize(rgb, fg, s.max_colors)
+    label_map, palette = segmentation.quantize(
+        rgb, fg, s.max_colors, s.palette_hint)
     min_area_px = s.min_object_mm2 / max(sx * sy, 1e-9)
-    label_map, palette = segmentation.collapse_antialias_colors(
-        label_map, palette, rgb, mm_per_px)
+    if not s.palette_hint:
+        label_map, palette = segmentation.collapse_antialias_colors(
+            label_map, palette, rgb, mm_per_px)
     label_map = segmentation.absorb_small_regions(
         label_map, min_area_px, 0.5 / max(mm_per_px, 1e-9),
         palette=palette, keep_px=0.5 / max(mm_per_px * mm_per_px, 1e-9))

@@ -15,6 +15,72 @@ import {
 
 const MM_PER_INCH = 25.4;
 
+function svgPalette(svgText: string): string[] {
+  // The SVG's declared fills/strokes are the authoritative thread colors.
+  const ctx = document.createElement("canvas").getContext("2d")!;
+  const found = new Set<string>();
+  const re = /(?:fill|stroke)\s*[:=]\s*["']?([^"';>\s}]+)/g;
+  let m;
+  while ((m = re.exec(svgText))) {
+    const v = m[1].trim();
+    if (!v || v === "none" || v === "transparent" || v.startsWith("url"))
+      continue;
+    ctx.fillStyle = "#000000";
+    ctx.fillStyle = v;
+    const norm = ctx.fillStyle;
+    if (/^#[0-9a-f]{6}$/.test(norm)) found.add(norm);
+  }
+  return [...found].slice(0, 12);
+}
+
+async function svgToPng(
+  file: File,
+): Promise<{ file: File; palette: string[] }> {
+  let text = await file.text();
+  const load = (src: string) =>
+    new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
+    });
+  let url = URL.createObjectURL(new Blob([text], { type: "image/svg+xml" }));
+  let img = await load(url);
+  if (!img.naturalWidth || !img.naturalHeight) {
+    // SVG with only a viewBox: inject explicit dimensions.
+    const m = text.match(/viewBox\s*=\s*"([-\d.\s]+)"/);
+    let w = 1200,
+      h = 1200;
+    if (m) {
+      const parts = m[1].trim().split(/\s+/).map(Number);
+      if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+        const s = 1200 / Math.max(parts[2], parts[3]);
+        w = Math.round(parts[2] * s);
+        h = Math.round(parts[3] * s);
+      }
+    }
+    URL.revokeObjectURL(url);
+    text = text.replace(/<svg/, `<svg width="${w}" height="${h}"`);
+    url = URL.createObjectURL(new Blob([text], { type: "image/svg+xml" }));
+    img = await load(url);
+  }
+  const scale = 1200 / Math.max(img.naturalWidth, img.naturalHeight, 1);
+  const w = Math.max(1, Math.round(img.naturalWidth * scale));
+  const h = Math.max(1, Math.round(img.naturalHeight * scale));
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  c.getContext("2d")!.drawImage(img, 0, 0, w, h);
+  URL.revokeObjectURL(url);
+  const blob = await new Promise<Blob | null>((r) => c.toBlob(r, "image/png"));
+  if (!blob) throw new Error("Could not rasterize the SVG.");
+  const base = file.name.replace(/\.svg$/i, "");
+  return {
+    file: new File([blob], `${base}.png`, { type: "image/png" }),
+    palette: svgPalette(text),
+  };
+}
+
 function Section(props: {
   step: number;
   title: string;
@@ -124,7 +190,23 @@ export default function Home() {
   const onFile = useCallback(
     (f: File) => {
       setOriginalFile(null);
+      if (f.type === "image/svg+xml" || /\.svg$/i.test(f.name)) {
+        setError(null);
+        svgToPng(f)
+          .then(({ file: png, palette }) => {
+            swapFile(png);
+            setSettings((s) => ({
+              ...s,
+              palette_hint: palette,
+              max_colors: Math.max(s.max_colors,
+                Math.min(12, palette.length || s.max_colors)),
+            }));
+          })
+          .catch(() => setError("Could not read that SVG file."));
+        return;
+      }
       swapFile(f);
+      setSettings((s) => ({ ...s, palette_hint: [] }));
     },
     [swapFile],
   );

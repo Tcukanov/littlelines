@@ -40,6 +40,7 @@ export interface AppSettings {
   line_art: boolean;
   line_passes: number;
   color_settings: Record<number, ColorSetting>;
+  palette_hint: string[];
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -61,6 +62,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   line_art: false,
   line_passes: 2,
   color_settings: {},
+  palette_hint: [],
 };
 
 // Stitch event commands (must match backend plan.py)

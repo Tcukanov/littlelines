@@ -53,6 +53,8 @@ class Settings:
     line_passes: int = 2        # 1 | 2 | 3
     # Per-color overrides, keyed by palette index
     color_settings: Dict[int, ColorSetting] = field(default_factory=dict)
+    # Exact palette from vector sources (SVG): skips k-means entirely.
+    palette_hint: list = field(default_factory=list)
 
     # Hard machine limits
     max_stitch_mm: float = 12.0
@@ -80,6 +82,11 @@ class Settings:
         s.auto_color_change = _b(d, "auto_color_change", True)
         s.line_art = _b(d, "line_art", False)
         s.line_passes = _i(d, "line_passes", 2, 1, 3)
+        import re as _re
+        hint = d.get("palette_hint") or []
+        s.palette_hint = [h for h in hint
+                          if isinstance(h, str)
+                          and _re.fullmatch(r"#[0-9a-fA-F]{6}", h)][:12]
         cs = d.get("color_settings") or {}
         for k, v in cs.items():
             try:
