@@ -40,6 +40,7 @@ class Settings:
     detail: int = 50            # 0 = very simplified, 100 = keep detail
     min_object_mm2: float = 2.0
     remove_background: bool = True
+    photo_mode: bool = False  # photographed drawing on paper
     # Stitch settings
     density_mm: float = 0.40    # row/zigzag spacing
     stitch_len_mm: float = 3.0
@@ -74,6 +75,7 @@ class Settings:
         s.detail = _i(d, "detail", 50, 0, 100)
         s.min_object_mm2 = _f(d, "min_object_mm2", 2.0, 0.0, 100.0)
         s.remove_background = _b(d, "remove_background", True)
+        s.photo_mode = _b(d, "photo_mode", False)
         s.density_mm = _f(d, "density_mm", 0.40, 0.25, 1.0)
         s.stitch_len_mm = _f(d, "stitch_len_mm", 3.0, 1.0, 7.0)
         s.satin_width_mm = _f(d, "satin_width_mm", 3.5, 1.0, 7.0)

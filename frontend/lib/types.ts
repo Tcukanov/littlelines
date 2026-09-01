@@ -30,6 +30,7 @@ export interface AppSettings {
   detail: number;
   min_object_mm2: number;
   remove_background: boolean;
+  photo_mode: boolean;
   density_mm: number;
   stitch_len_mm: number;
   satin_width_mm: number;
@@ -53,6 +54,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   detail: 50,
   min_object_mm2: 2,
   remove_background: true,
+  photo_mode: false,
   density_mm: 0.4,
   stitch_len_mm: 3,
   satin_width_mm: 3.5,

@@ -22,7 +22,12 @@ def _hex(rgb: Tuple[int, int, int]) -> str:
 def analyze(data: bytes, settings: Settings) -> dict:
     """First pass after upload: detect colors/shapes, return a preview."""
     rgb, alpha = segmentation.load_image(data)
-    fg = segmentation.foreground_mask(rgb, alpha, settings.remove_background)
+    if settings.photo_mode:
+        rgb = segmentation.paper_normalize(rgb)
+        fg = segmentation.paper_foreground(rgb)
+    else:
+        fg = segmentation.foreground_mask(rgb, alpha,
+                                          settings.remove_background)
     rgb, alpha, fg = segmentation.crop_to_foreground(rgb, alpha, fg)
     h, w = fg.shape
     label_map, palette = segmentation.quantize(
@@ -76,7 +81,12 @@ def cleanup(data: bytes, settings: Settings) -> bytes:
     """Vectorize-style cleanup: quantize to flat colors, absorb fragments,
     trace each color to smooth polygons and re-render a clean 2x PNG."""
     rgb, alpha = segmentation.load_image(data)
-    fg = segmentation.foreground_mask(rgb, alpha, settings.remove_background)
+    if settings.photo_mode:
+        rgb = segmentation.paper_normalize(rgb)
+        fg = segmentation.paper_foreground(rgb)
+    else:
+        fg = segmentation.foreground_mask(rgb, alpha,
+                                          settings.remove_background)
     rgb, alpha, fg = segmentation.crop_to_foreground(rgb, alpha, fg)
     h, w = fg.shape
     label_map, palette = segmentation.quantize(
@@ -147,7 +157,12 @@ def _smooth_closed(pts: np.ndarray, eps: float):
 
 def digitize(data: bytes, settings: Settings) -> Tuple[Plan, dict, List[str]]:
     rgb, alpha = segmentation.load_image(data)
-    fg = segmentation.foreground_mask(rgb, alpha, settings.remove_background)
+    if settings.photo_mode:
+        rgb = segmentation.paper_normalize(rgb)
+        fg = segmentation.paper_foreground(rgb)
+    else:
+        fg = segmentation.foreground_mask(rgb, alpha,
+                                          settings.remove_background)
     rgb, alpha, fg = segmentation.crop_to_foreground(rgb, alpha, fg)
     h, w = fg.shape
     sx = settings.width_mm / max(w, 1)

@@ -672,6 +672,20 @@ export default function Home() {
                 checked={settings.remove_background}
                 onChange={(v) => set("remove_background", v)}
               />
+              <div
+                className={`rounded-xl border p-3 ${settings.photo_mode ? "border-sky-400 bg-sky-50" : "border-gray-200"}`}
+              >
+                <Toggle
+                  label="📷 Photo Mode — a photo of a drawing on paper"
+                  checked={settings.photo_mode}
+                  onChange={(v) => set("photo_mode", v)}
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Removes paper, shadows and camera lighting, then keeps only
+                  the drawn lines and colors. Use for phone photos of kids&apos;
+                  drawings.
+                </p>
+              </div>
 
               <div
                 className={`rounded-xl border p-3 ${settings.line_art ? "border-indigo-400 bg-indigo-50" : "border-gray-200"}`}

@@ -68,6 +68,47 @@ def _adaptive_shave(fg: np.ndarray, iterations: int) -> np.ndarray:
     return fg
 
 
+def paper_normalize(rgb: np.ndarray) -> np.ndarray:
+    """Photo mode: flatten a photographed drawing.
+
+    Divides the image by its own large-scale illumination (the paper),
+    which removes shadows and gradients and normalizes any paper tint to
+    white, then lifts saturation so crayon/marker colors stay true.
+    """
+    h, w = rgb.shape[:2]
+    k = max(31, (int(min(h, w) * 0.18) | 1))
+    bg = cv2.GaussianBlur(rgb.astype(np.float32), (k, k), 0)
+    bg = np.maximum(bg, 12.0)
+    flat = np.clip(rgb.astype(np.float32) / bg * 235.0, 0, 255)
+
+    hsv = cv2.cvtColor(flat.astype(np.uint8), cv2.COLOR_RGB2HSV) \
+        .astype(np.float32)
+    hsv[..., 1] = np.clip(hsv[..., 1] * 1.35, 0, 255)
+    out = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
+    # Bilateral smoothing kills paper grain and JPEG noise but keeps the
+    # pencil/crayon edges crisp.
+    return cv2.bilateralFilter(out, 9, 60, 9)
+
+
+def paper_foreground(rgb: np.ndarray) -> np.ndarray:
+    """Foreground mask for a normalized photo of a drawing: everything
+    that is meaningfully darker or more colorful than the paper."""
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    sat = hsv[..., 1].astype(np.int16)
+    val = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.int16)
+    paper_v = int(np.percentile(val, 92))
+    ink = (val < paper_v - 26) | (sat > 55)
+    ink = cv2.morphologyEx(ink.astype(np.uint8), cv2.MORPH_CLOSE,
+                           np.ones((3, 3), np.uint8))
+    n, comp, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+    keep = np.zeros_like(ink)
+    min_px = max(20, int(0.00004 * ink.size))
+    for ci in range(1, n):
+        if stats[ci][4] >= min_px:
+            keep[comp == ci] = 1
+    return keep.astype(bool)
+
+
 def _border_flood(rgb: np.ndarray, fg: np.ndarray) -> np.ndarray:
     """Flood fill from the border to find a solid-ish background."""
     h, w = rgb.shape[:2]
