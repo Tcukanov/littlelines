@@ -567,6 +567,17 @@ def _order_regions(regs, builder: PlanBuilder, sx: float, sy: float):
     return ordered
 
 
+def _has_hole(mask: np.ndarray) -> bool:
+    """True when the shape encloses background (a ring, an 'o', an eye)."""
+    h, w = mask.shape
+    pad = np.zeros((h + 2, w + 2), np.uint8)
+    pad[1:-1, 1:-1] = mask
+    inv = (1 - pad).astype(np.uint8)
+    ff = np.zeros((h + 4, w + 4), np.uint8)
+    cv2.floodFill(inv, ff, (0, 0), 0)
+    return bool(inv.any())
+
+
 def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
                    sx: float, sy: float, mm_per_px: float,
                    exclude=None, allowed=None) -> None:
@@ -582,7 +593,12 @@ def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
     # satin there produces crossing spaghetti. Such shapes must be filled.
     if stitch == "satin":
         compact = (r.area_px / max(r.p85_thickness_px ** 2, 1.0)) < 2.2
-        if compact and r.bbox_px * mm_per_px <= 8.0:
+        size_mm = r.bbox_px * mm_per_px
+        if compact and size_mm <= 8.0:
+            stitch = "fill"
+        elif size_mm <= 14.0 and _has_hole(r.mask):
+            # A small ring (an eye, an 'o'): satin rungs crowd against the
+            # inner edge and fan out on the outside — fill reads cleanly.
             stitch = "fill"
 
     # Hybrid split: only for STROKE-DOMINATED shapes (an outline network
