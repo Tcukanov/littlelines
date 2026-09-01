@@ -576,6 +576,14 @@ def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
                 builder.add_run(run)
         return
 
+    # Physical guard, applied even when the user forces satin: a small
+    # compact shape (an eye, a dot, a nose) has no meaningful centerline —
+    # satin there produces crossing spaghetti. Such shapes must be filled.
+    if stitch == "satin":
+        compact = (r.area_px / max(r.p85_thickness_px ** 2, 1.0)) < 2.2
+        if compact and r.bbox_px * mm_per_px <= 8.0:
+            stitch = "fill"
+
     # Hybrid split: only for STROKE-DOMINATED shapes (an outline network
     # with a few thick blobs). A merged fill body must stay one fill — its
     # narrow leftovers are not strokes to satin, they're part of the fill.
