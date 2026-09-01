@@ -257,12 +257,15 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
             island_jobs = []
             for ei in range(1, len(entries)):
                 for r in entries[ei][2]:
-                    if r.bbox_px * mm_per_px > 20:
+                    if r.bbox_px * mm_per_px > 40:
                         continue
                     ring = (cv2.dilate(r.mask, ring_k) > 0) & (r.mask == 0)
-                    if ring.any() and float(f_merged[ring].mean()) > 0.6:
+                    # Eligible if surrounded by ANY artwork that stitches
+                    # after this pre-pass (everything does) — the travel
+                    # runs get buried regardless of which color covers them.
+                    if ring.any() and float(occupied[ring].mean()) > 0.5:
                         island_jobs.append((ei, r))
-            if len(island_jobs) >= 3:
+            if len(island_jobs) >= 2:
                 from collections import defaultdict
                 by_color = defaultdict(list)
                 for ei, r in island_jobs:
@@ -273,8 +276,10 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
                     idx_c, rgb_c, _, cs_c, _, _ = entries[ei]
                     c_mask = (label_map == idx_c).astype(np.uint8)
                     builder.start_color(_hex(rgb_c))
+                    # Everything stitches after this pre-pass, so travel
+                    # may run over the whole artwork footprint.
                     builder.travel_router = _make_travel_router(
-                        (f_merged | c_mask).astype(np.uint8), sx, sy,
+                        (occupied | c_mask).astype(np.uint8), sx, sy,
                         s.stitch_len_mm)
                     for r in _order_regions(regs_i, builder, sx, sy):
                         st = cs_c.stitch if cs_c is not None else "auto"
@@ -288,8 +293,19 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
                 islands_excl = cv2.dilate(
                     islands_mask, np.ones((2 * excl_px + 1,) * 2, np.uint8))
 
-    for idx, rgb_c, regs, cs, major, _ in entries:
-        color_mask = (label_map == idx).astype(np.uint8)
+    # Future-coverage suffix masks: travel for block k may also run under
+    # anything a LATER block will stitch over (it gets buried), not only
+    # its own color's territory.
+    raw_masks = [(label_map == e[0]).astype(np.uint8) for e in entries]
+    later_cover = []
+    acc = np.zeros_like(occupied)
+    for m in reversed(raw_masks):
+        later_cover.append(acc.copy())
+        acc |= m
+    later_cover.reverse()
+
+    for k, (idx, rgb_c, regs, cs, major, _) in enumerate(entries):
+        color_mask = raw_masks[k]
         effective = cs.stitch if cs is not None and cs.stitch != "auto" \
             else major
         if effective == "fill":
@@ -310,7 +326,8 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
             continue
         builder.start_color(_hex(rgb_c))
         builder.travel_router = _make_travel_router(
-            color_mask, sx, sy, s.stitch_len_mm)
+            (color_mask | later_cover[k]).astype(np.uint8), sx, sy,
+            s.stitch_len_mm)
         regs = _order_regions(regs, builder, sx, sy)
         excl = islands_excl if idx == entries[0][0] else None
         for r in regs:
@@ -329,12 +346,14 @@ def _make_travel_router(mask: np.ndarray, sx: float, sy: float,
     regions can connect without a trim — the commercial near-zero-trim
     technique."""
     from collections import deque
-    grid = cv2.dilate(mask, np.ones((3, 3), np.uint8)) > 0
+    # Half-resolution grid keeps BFS fast enough to route across the whole
+    # design; dilating first keeps thin strokes connected after sampling.
+    grid = (cv2.dilate(mask, np.ones((5, 5), np.uint8)) > 0)[::2, ::2]
     h, w = grid.shape
 
     def to_cell(p):
-        return (min(h - 1, max(0, int(round(p[1] / sy)))),
-                min(w - 1, max(0, int(round(p[0] / sx)))))
+        return (min(h - 1, max(0, int(round(p[1] / sy / 2)))),
+                min(w - 1, max(0, int(round(p[0] / sx / 2)))))
 
     def snap(c):
         if grid[c]:
@@ -353,11 +372,11 @@ def _make_travel_router(mask: np.ndarray, sx: float, sy: float,
         if a is None or b is None:
             return None
         straight = float(np.hypot(b_mm[0] - a_mm[0], b_mm[1] - a_mm[1]))
-        max_len = min(80.0, straight * 4.0 + 6.0)
+        max_len = min(160.0, straight * 5.0 + 10.0)
         q = deque([a])
         parent = {a: None}
         found = False
-        budget = 60000
+        budget = 150000
         while q and budget:
             budget -= 1
             cur = q.popleft()
@@ -378,7 +397,7 @@ def _make_travel_router(mask: np.ndarray, sx: float, sy: float,
             cells.append(cur)
             cur = parent[cur]
         cells.reverse()
-        path = np.array([[c[1] * sx, c[0] * sy] for c in cells])
+        path = np.array([[c[1] * sx * 2, c[0] * sy * 2] for c in cells])
         if fills.path_length(path) > max_len:
             return None
         return fills.resample_path(path, min(stitch_len_mm, 2.5))
