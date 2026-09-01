@@ -33,6 +33,9 @@ class PlanBuilder:
         self.pos: Optional[np.ndarray] = None
         self._color_started = False
         self._needs_tie_in = True  # thread not anchored yet
+        # Optional per-color router: returns an mm polyline through the
+        # color's own footprint (invisible travel) or None.
+        self.travel_router = None
 
     def _lock(self, p: np.ndarray) -> None:
         """Tie stitches: 3 tiny stitches so the thread can't pull loose."""
@@ -72,13 +75,23 @@ class PlanBuilder:
                     # invisible but saves a full machine stop/start cycle.
                     self._emit_move(CMD_STITCH, pts[0], self.max_stitch)
                 else:
-                    if self.trim_enabled and gap > self.trim_threshold:
-                        self._lock(self.pos)  # tie-off before the cut
-                        self.plan.events.append(
-                            (CMD_TRIM, float(self.pos[0]),
-                             float(self.pos[1])))
-                        self._needs_tie_in = True
-                    self._emit_move(CMD_JUMP, pts[0], self.max_jump)
+                    travel = None
+                    if self.travel_router is not None:
+                        travel = self.travel_router(self.pos, pts[0])
+                    if travel is not None:
+                        # Hidden travel: running stitches routed along the
+                        # color's own footprint — invisible, no stop.
+                        for p in travel:
+                            self._emit_move(CMD_STITCH, np.asarray(p),
+                                            self.max_stitch)
+                    else:
+                        if self.trim_enabled and gap > self.trim_threshold:
+                            self._lock(self.pos)  # tie-off before the cut
+                            self.plan.events.append(
+                                (CMD_TRIM, float(self.pos[0]),
+                                 float(self.pos[1])))
+                            self._needs_tie_in = True
+                        self._emit_move(CMD_JUMP, pts[0], self.max_jump)
         if self._needs_tie_in:
             self._lock(pts[0])  # tie-in: anchor the new thread start
             self.pos = pts[0]

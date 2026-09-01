@@ -175,6 +175,7 @@ def _digitize_line_art(builder: PlanBuilder, rgb, fg, s: Settings,
     # Thread color = mean of the dark pixels.
     color = rgb[mask > 0].mean(axis=0)
     builder.start_color(_hex(tuple(color)))
+    builder.travel_router = _make_travel_router(mask, sx, sy, s.stitch_len_mm)
 
     # Keep even tiny stub paths: dropping them severs the stroke graph at
     # junctions and turns one continuous walk into dozens of jumps.
@@ -253,12 +254,79 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
         stitched |= color_mask
 
         builder.start_color(_hex(rgb_c))
+        builder.travel_router = _make_travel_router(
+            color_mask, sx, sy, s.stitch_len_mm)
         regs = _order_regions(regs, builder, sx, sy)
         for r in regs:
             stitch = cs.stitch if cs is not None else "auto"
             if stitch == "auto":
                 stitch = regions.suggest_stitch(r, mm_per_px, s.satin_width_mm)
             _stitch_region(builder, r, stitch, s, sx, sy, mm_per_px)
+        builder.travel_router = None
+
+
+def _make_travel_router(mask: np.ndarray, sx: float, sy: float,
+                        stitch_len_mm: float):
+    """BFS pathfinder over a color's footprint: running-stitch travel over
+    same-color areas is invisible (covered before or after), so separate
+    regions can connect without a trim — the commercial near-zero-trim
+    technique."""
+    from collections import deque
+    grid = cv2.dilate(mask, np.ones((3, 3), np.uint8)) > 0
+    h, w = grid.shape
+
+    def to_cell(p):
+        return (min(h - 1, max(0, int(round(p[1] / sy)))),
+                min(w - 1, max(0, int(round(p[0] / sx)))))
+
+    def snap(c):
+        if grid[c]:
+            return c
+        for r in range(1, 5):
+            for dy in range(-r, r + 1):
+                for dx in range(-r, r + 1):
+                    y, x = c[0] + dy, c[1] + dx
+                    if 0 <= y < h and 0 <= x < w and grid[y, x]:
+                        return (y, x)
+        return None
+
+    def router(a_mm, b_mm):
+        a = snap(to_cell(a_mm))
+        b = snap(to_cell(b_mm))
+        if a is None or b is None:
+            return None
+        straight = float(np.hypot(b_mm[0] - a_mm[0], b_mm[1] - a_mm[1]))
+        max_len = min(80.0, straight * 4.0 + 6.0)
+        q = deque([a])
+        parent = {a: None}
+        found = False
+        budget = 60000
+        while q and budget:
+            budget -= 1
+            cur = q.popleft()
+            if cur == b:
+                found = True
+                break
+            y, x = cur
+            for ny, nx in ((y-1, x), (y+1, x), (y, x-1), (y, x+1)):
+                if 0 <= ny < h and 0 <= nx < w and grid[ny, nx] \
+                        and (ny, nx) not in parent:
+                    parent[(ny, nx)] = cur
+                    q.append((ny, nx))
+        if not found:
+            return None
+        cells = []
+        cur = b
+        while cur is not None:
+            cells.append(cur)
+            cur = parent[cur]
+        cells.reverse()
+        path = np.array([[c[1] * sx, c[0] * sy] for c in cells])
+        if fills.path_length(path) > max_len:
+            return None
+        return fills.resample_path(path, min(stitch_len_mm, 2.5))
+
+    return router
 
 
 def _order_regions(regs, builder: PlanBuilder, sx: float, sy: float):
