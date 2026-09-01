@@ -646,7 +646,11 @@ def _split_thick_blobs(mask: np.ndarray, s: Settings, mm_per_px: float):
               if inner_all.size else 0.0)
     eff_cap = max(s.satin_width_mm, min(6.0, typ_mm))
     thr_px = (eff_cap / 2.0) / max(mm_per_px, 1e-9)
-    core = (dt > thr_px * 1.3).astype(np.uint8)
+    # Only carve out parts satin physically cannot cover (~6.5mm+). Letter
+    # joins and stroke overlaps are thicker than the strokes but still
+    # satin-able; carving them makes fill patches inside lettering.
+    core_thr_px = max(thr_px * 1.3, (6.5 / 2.0) / max(mm_per_px, 1e-9))
+    core = (dt > core_thr_px).astype(np.uint8)
     if not core.any():
         return mask, None
     # Reconstruct with a radius >= the core threshold so a solid shape

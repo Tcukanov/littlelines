@@ -42,6 +42,17 @@ const FONTS = [
 
 const SIZE = 260;
 
+// Fonts whose letters are designed to join. Only these get auto-kerned
+// into one shape; block letters touching would just look mis-kerned.
+const SCRIPT_FONTS = new Set([
+  "Pacifico",
+  "Yellowtail",
+  "Dancing Script",
+  "Great Vibes",
+  "Lobster",
+  "Brush Script MT",
+]);
+
 function drawChar(
   g: CanvasRenderingContext2D,
   ch: string,
@@ -79,6 +90,47 @@ function drawChar(
   g.restore();
 }
 
+/** Smallest horizontal gap (px) between ink already on `g` and the glyph
+ *  on `sg`, measured row by row across the letter's height. Negative
+ *  when they already overlap; Infinity when they share no rows. */
+function inkGap(
+  g: CanvasRenderingContext2D,
+  sg: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  baseY: number,
+): number {
+  const y0 = Math.max(0, Math.floor(baseY - SIZE * 1.1));
+  const y1 = Math.min(h, Math.ceil(baseY + SIZE * 0.55));
+  const rows = y1 - y0;
+  if (rows <= 0) return Infinity;
+  const a = g.getImageData(0, y0, w, rows).data;
+  const b = sg.getImageData(0, y0, w, rows).data;
+  let best = Infinity;
+  for (let r = 0; r < rows; r++) {
+    const off = r * w * 4 + 3;
+    let right = -1;
+    for (let x = w - 1; x >= 0; x--) {
+      if (a[off + x * 4] > 40) {
+        right = x;
+        break;
+      }
+    }
+    if (right < 0) continue;
+    let left = -1;
+    for (let x = 0; x < w; x++) {
+      if (b[off + x * 4] > 40) {
+        left = x;
+        break;
+      }
+    }
+    if (left < 0) continue;
+    const d = left - right;
+    if (d < best) best = d;
+  }
+  return best;
+}
+
 async function renderText(
   text: string,
   font: string,
@@ -87,6 +139,7 @@ async function renderText(
   color: string,
   outline: boolean,
   archPct: number,
+  connect: boolean,
 ): Promise<HTMLCanvasElement | null> {
   const lines = text.split("\n").filter((l) => l.trim().length > 0);
   if (lines.length === 0) return null;
@@ -129,9 +182,35 @@ async function renderText(
     const baseY = margin + SIZE + li * lineStep;
     if (archRad < 0.02) {
       let x = cx - W / 2;
+      let prevInk = false;
+      const kern = connect && !outline && SCRIPT_FONTS.has(font);
+      const scratch = kern ? document.createElement("canvas") : null;
+      if (scratch) {
+        scratch.width = c.width;
+        scratch.height = c.height;
+      }
       chars.forEach((ch, i) => {
+        const hasInk = ch.trim().length > 0;
+        if (scratch && hasInk && prevInk) {
+          // Auto-kern: slide this glyph left until its ink overlaps the
+          // previous glyph slightly, so a script word becomes ONE shape
+          // (what lettering software does; a gap of even 1px = a jump).
+          const sg = scratch.getContext("2d")!;
+          sg.clearRect(0, 0, scratch.width, scratch.height);
+          sg.font = g.font;
+          sg.textAlign = g.textAlign;
+          sg.textBaseline = g.textBaseline;
+          drawChar(sg, ch, x + widths[i] / 2, baseY, 0, color, false);
+          const gap = inkGap(g, sg, c.width, c.height, baseY);
+          if (Number.isFinite(gap)) {
+            const overlap = SIZE * 0.035;
+            const shift = Math.min(gap + overlap, SIZE * 0.16);
+            if (shift > 0) x -= shift;
+          }
+        }
         drawChar(g, ch, x + widths[i] / 2, baseY, 0, color, outline);
         x += widths[i] + extra;
+        prevInk = hasInk;
       });
     } else {
       const R = W / archRad;
@@ -164,7 +243,16 @@ export default function TextMaker({ onFile }: Props) {
   useEffect(() => {
     let stale = false;
     const t = setTimeout(async () => {
-      const c = await renderText(text, font, bold, italic, color, outline, arch);
+      const c = await renderText(
+        text,
+        font,
+        bold,
+        italic,
+        color,
+        outline,
+        arch,
+        connect,
+      );
       if (stale) return;
       canvasRef.current = c;
       setPreview(c ? c.toDataURL("image/png") : null);
@@ -173,7 +261,7 @@ export default function TextMaker({ onFile }: Props) {
       stale = true;
       clearTimeout(t);
     };
-  }, [text, font, bold, italic, color, outline, arch]);
+  }, [text, font, bold, italic, color, outline, arch, connect]);
 
   // Smallest output width (mm) where the finest feature of this design —
   // the varsity inline channel (0.03 × SIZE px) — is still ≥ 0.75 mm.
