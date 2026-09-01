@@ -19,6 +19,8 @@ export interface AnalyzeResult {
 export interface ColorSetting {
   enabled: boolean;
   stitch: StitchType;
+  merge_into?: number;
+  thread_hex?: string;
 }
 
 export interface AppSettings {

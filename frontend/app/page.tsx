@@ -516,30 +516,68 @@ export default function Home() {
                           })
                         }
                       />
-                      <span
-                        className="h-6 w-6 rounded-full border border-gray-300"
-                        style={{ background: c.hex }}
+                      <input
+                        type="color"
+                        title="Pick the thread color"
+                        className="h-6 w-7 cursor-pointer rounded border border-gray-300 bg-transparent p-0"
+                        value={cs.thread_hex || c.hex}
+                        onChange={(e) =>
+                          set("color_settings", {
+                            ...settings.color_settings,
+                            [c.index]: { ...cs, thread_hex: e.target.value },
+                          })
+                        }
                       />
                       <span className="flex-1 text-xs text-gray-500">
-                        {c.hex} · {c.regions} shape{c.regions !== 1 && "s"}
+                        {cs.thread_hex || c.hex} · {c.regions} shape
+                        {c.regions !== 1 && "s"}
                       </span>
+                      {(cs.merge_into ?? -1) < 0 && (
+                        <select
+                          className="rounded-lg border border-gray-300 px-2 py-1 text-xs text-gray-700"
+                          value={cs.stitch}
+                          onChange={(e) =>
+                            set("color_settings", {
+                              ...settings.color_settings,
+                              [c.index]: {
+                                ...cs,
+                                stitch: e.target.value as StitchType,
+                              },
+                            })
+                          }
+                        >
+                          <option value="auto">Auto ({c.suggested})</option>
+                          <option value="fill">Fill stitch</option>
+                          <option value="satin">Satin stitch</option>
+                          <option value="running">Running stitch</option>
+                        </select>
+                      )}
                       <select
-                        className="rounded-lg border border-gray-300 px-2 py-1 text-xs text-gray-700"
-                        value={cs.stitch}
+                        title="Merge this color into another"
+                        className={`rounded-lg border px-2 py-1 text-xs ${
+                          (cs.merge_into ?? -1) >= 0
+                            ? "border-violet-400 bg-violet-50 text-violet-700"
+                            : "border-gray-300 text-gray-500"
+                        }`}
+                        value={cs.merge_into ?? -1}
                         onChange={(e) =>
                           set("color_settings", {
                             ...settings.color_settings,
                             [c.index]: {
                               ...cs,
-                              stitch: e.target.value as StitchType,
+                              merge_into: Number(e.target.value),
                             },
                           })
                         }
                       >
-                        <option value="auto">Auto ({c.suggested})</option>
-                        <option value="fill">Fill stitch</option>
-                        <option value="satin">Satin stitch</option>
-                        <option value="running">Running stitch</option>
+                        <option value={-1}>keep</option>
+                        {analysis.colors
+                          .filter((o) => o.index !== c.index)
+                          .map((o) => (
+                            <option key={o.index} value={o.index}>
+                              → {o.hex}
+                            </option>
+                          ))}
                       </select>
                     </div>
                   );

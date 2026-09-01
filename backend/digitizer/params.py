@@ -26,6 +26,8 @@ def _b(d: dict, key: str, default: bool) -> bool:
 class ColorSetting:
     enabled: bool = True
     stitch: str = "auto"  # auto | fill | satin | running
+    merge_into: int = -1      # >=0: recolor this color into that index
+    thread_hex: str = ""      # override thread color for display/export
 
 
 @dataclass
@@ -98,7 +100,16 @@ class Settings:
             stitch = str(v.get("stitch", "auto"))
             if stitch not in ("auto", "fill", "satin", "running"):
                 stitch = "auto"
+            import re as _re2
+            th = str(v.get("thread_hex", "") or "")
+            if not _re2.fullmatch(r"#[0-9a-fA-F]{6}", th):
+                th = ""
+            try:
+                mi = int(v.get("merge_into", -1))
+            except (TypeError, ValueError):
+                mi = -1
             s.color_settings[idx] = ColorSetting(
-                enabled=bool(v.get("enabled", True)), stitch=stitch
+                enabled=bool(v.get("enabled", True)), stitch=stitch,
+                merge_into=mi, thread_hex=th,
             )
         return s

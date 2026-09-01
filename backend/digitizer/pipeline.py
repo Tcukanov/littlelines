@@ -217,6 +217,19 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
         label_map, min_area_px, 0.5 / max(mm_per_px, 1e-9),
         palette=palette, keep_px=0.5 / max(mm_per_px * mm_per_px, 1e-9))
 
+    # Apply user color merges: pixels of a merged color join their target
+    # color, removing a thread block (and enlarging routing territory).
+    for m_idx, m_cs in s.color_settings.items():
+        tgt = m_cs.merge_into
+        hops = 0
+        while (0 <= tgt < len(palette) and tgt != m_idx and hops < 12
+               and s.color_settings.get(tgt) is not None
+               and s.color_settings[tgt].merge_into >= 0):
+            tgt = s.color_settings[tgt].merge_into
+            hops += 1
+        if 0 <= tgt < len(palette) and tgt != m_idx:
+            label_map[label_map == m_idx] = tgt
+
     # Collect all colors first so we can pick a good stitching order:
     # large fill areas go down first, thin outline-like colors go last so
     # they cover the seams between fills. If the small-object threshold
@@ -323,7 +336,10 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
                 for ei, regs_i in by_color.items():
                     idx_c, rgb_c, _, cs_c, _, _ = entries[ei]
                     c_mask = (label_map == idx_c).astype(np.uint8)
-                    builder.start_color(_hex(rgb_c))
+                    th_hex = _hex(rgb_c)
+                    if cs_c is not None and cs_c.thread_hex:
+                        th_hex = cs_c.thread_hex
+                    builder.start_color(th_hex)
                     _prepass_start = len(builder.plan.events)
                     # Everything stitches after this pre-pass, so travel
                     # may run over the whole artwork footprint.
