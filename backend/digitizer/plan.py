@@ -175,7 +175,11 @@ class PlanBuilder:
             "jumps": jumps,
             "trims": trims,
             "color_changes": changes,
-            "colors": len(plan.threads),
+            # Distinct thread colors = spools to load. A color may be
+            # stitched in several blocks (islands buried under a later
+            # fill), which shows up as color_changes, not extra colors.
+            "colors": len({t.lower() for t in plan.threads}),
+            "color_blocks": len(plan.threads),
             "width_mm": round(width, 1),
             "height_mm": round(height, 1),
             "est_minutes": round(minutes, 1),

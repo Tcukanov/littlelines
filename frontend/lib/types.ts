@@ -83,6 +83,7 @@ export interface Stats {
   trims: number;
   color_changes: number;
   colors: number;
+  color_blocks?: number;
   width_mm: number;
   height_mm: number;
   est_minutes: number;

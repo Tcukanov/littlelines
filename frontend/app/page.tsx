@@ -532,12 +532,27 @@ export default function Home() {
                         title="Pick the thread color"
                         className="h-6 w-7 cursor-pointer rounded border border-gray-300 bg-transparent p-0"
                         value={cs.thread_hex || c.hex}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          const oldHex = (cs.thread_hex || c.hex).toLowerCase();
+                          const newHex = e.target.value;
+                          // Recolor the preview immediately — thread color
+                          // never changes geometry, so don't wait for the
+                          // re-digitize round trip.
+                          setResult((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  threads: prev.threads.map((t) =>
+                                    t.toLowerCase() === oldHex ? newHex : t,
+                                  ),
+                                }
+                              : prev,
+                          );
                           set("color_settings", {
                             ...settings.color_settings,
-                            [c.index]: { ...cs, thread_hex: e.target.value },
-                          })
-                        }
+                            [c.index]: { ...cs, thread_hex: newHex },
+                          });
+                        }}
                       />
                       <span className="flex-1 text-xs text-gray-500">
                         {cs.thread_hex || c.hex} · {c.regions} shape
@@ -857,7 +872,12 @@ export default function Home() {
                 <div className="mt-4 grid grid-cols-3 gap-3 text-center md:grid-cols-6">
                   {[
                     ["Stitches", stats.stitches.toLocaleString()],
-                    ["Colors", stats.colors],
+                    [
+                      "Colors",
+                      stats.color_blocks && stats.color_blocks > stats.colors
+                        ? `${stats.colors} (${stats.color_blocks} blocks)`
+                        : stats.colors,
+                    ],
                     ["Trims", stats.trims],
                     ["Jumps", stats.jumps],
                     ["Size", `${stats.width_mm}×${stats.height_mm}mm`],
