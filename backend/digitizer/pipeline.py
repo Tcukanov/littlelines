@@ -32,7 +32,8 @@ def analyze(data: bytes, settings: Settings) -> dict:
     mm_per_px = (sx + sy) / 2.0
     min_area_px = settings.min_object_mm2 / max(sx * sy, 1e-9)
     label_map = segmentation.absorb_small_regions(
-        label_map, min_area_px, 0.5 / max(mm_per_px, 1e-9))
+        label_map, min_area_px, 0.5 / max(mm_per_px, 1e-9),
+        palette=palette, keep_px=0.5 / max(mm_per_px * mm_per_px, 1e-9))
 
     colors = []
     render = np.full((h, w, 4), 0, np.uint8)
@@ -82,7 +83,8 @@ def cleanup(data: bytes, settings: Settings) -> bytes:
     mm_per_px = (sx + sy) / 2.0
     min_area_px = settings.min_object_mm2 / max(sx * sy, 1e-9)
     label_map = segmentation.absorb_small_regions(
-        label_map, min_area_px, 0.5 / max(mm_per_px, 1e-9))
+        label_map, min_area_px, 0.5 / max(mm_per_px, 1e-9),
+        palette=palette, keep_px=0.5 / max(mm_per_px * mm_per_px, 1e-9))
 
     scale = 2
     out = np.zeros((h * scale, w * scale, 4), np.uint8)
@@ -201,7 +203,8 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
     label_map, palette = segmentation.quantize(rgb, fg, s.max_colors)
     min_area_px = s.min_object_mm2 / max(sx * sy, 1e-9)
     label_map = segmentation.absorb_small_regions(
-        label_map, min_area_px, 0.5 / max(mm_per_px, 1e-9))
+        label_map, min_area_px, 0.5 / max(mm_per_px, 1e-9),
+        palette=palette, keep_px=0.5 / max(mm_per_px * mm_per_px, 1e-9))
 
     # Collect all colors first so we can pick a good stitching order:
     # large fill areas go down first, thin outline-like colors go last so

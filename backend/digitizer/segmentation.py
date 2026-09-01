@@ -147,13 +147,25 @@ def _merge_close(centers: np.ndarray, threshold: float) -> np.ndarray:
 
 
 def absorb_small_regions(label_map: np.ndarray, min_area_px: float,
-                         min_thick_px: float) -> np.ndarray:
+                         min_thick_px: float,
+                         palette=None, keep_px: float = 0.0) -> np.ndarray:
     """Reassign unstitchable fragments (too small or too thin) to the
     surrounding color instead of dropping them — dropping leaves bare
-    fabric holes inside neighboring fills."""
+    fabric holes inside neighboring fills.
+
+    Exception: a small COMPACT fragment whose color strongly contrasts
+    with its surroundings (a white highlight dot inside a black eye) is
+    intentional detail — it becomes a hole (background) so the
+    surrounding fill leaves it open, instead of being painted over.
+    """
     lm = label_map.copy()
     n_colors = int(lm.max()) + 1
     k3 = np.ones((3, 3), np.uint8)
+    lab_palette = None
+    if palette is not None and len(palette) > 0:
+        arr = np.array(palette, np.uint8).reshape(1, -1, 3)
+        lab_palette = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB).reshape(-1, 3) \
+            .astype(np.float32)
     for _ in range(2):
         changed = False
         for idx in range(n_colors):
@@ -181,8 +193,20 @@ def absorb_small_regions(label_map: np.ndarray, min_area_px: float,
                 sub = lm[y0:y1, x0:x1]
                 if vals.size == 0:
                     sub[m] = -1
-                else:
-                    sub[m] = int(np.bincount(vals).argmax())
+                    changed = True
+                    continue
+                nb = int(np.bincount(vals).argmax())
+                if (small and lab_palette is not None and area >= keep_px):
+                    dt2 = cv2.distanceTransform(m.astype(np.uint8),
+                                                cv2.DIST_L2, 3)
+                    compact = float(dt2.max()) * 2.0 >= min_thick_px
+                    contrast = float(np.linalg.norm(
+                        lab_palette[idx] - lab_palette[nb]))
+                    if compact and contrast > 25.0:
+                        sub[m] = -1  # intentional detail -> keep as a hole
+                        changed = True
+                        continue
+                sub[m] = nb
                 changed = True
         if not changed:
             break
