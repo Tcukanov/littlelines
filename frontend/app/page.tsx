@@ -30,7 +30,10 @@ function svgPalette(svgText: string): string[] {
     const norm = ctx.fillStyle;
     if (/^#[0-9a-f]{6}$/.test(norm)) found.add(norm);
   }
-  return [...found].slice(0, 12);
+  const all = [...found];
+  // An auto-traced SVG declares a color per shade band (hundreds). Such a
+  // palette is not authoritative — fall back to perceptual clustering.
+  return all.length <= 24 ? all : [];
 }
 
 async function svgToPng(
@@ -165,6 +168,9 @@ export default function Home() {
   const [cleaning, setCleaning] = useState(false);
   const [sourceTab, setSourceTab] = useState<"image" | "text">("image");
   const [inspectedName, setInspectedName] = useState<string | null>(null);
+  const [sourceInfo, setSourceInfo] = useState<
+    { name: string; colors: number } | null
+  >(null);
   const inspectInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [backendUp, setBackendUp] = useState(true);
@@ -197,6 +203,7 @@ export default function Home() {
         svgToPng(f)
           .then(({ file: png, palette }) => {
             swapFile(png);
+            setSourceInfo({ name: f.name, colors: palette.length });
             setSettings((s) => ({
               ...s,
               palette_hint: palette,
@@ -208,6 +215,7 @@ export default function Home() {
         return;
       }
       swapFile(f);
+      setSourceInfo(null);
       setSettings((s) => ({ ...s, palette_hint: [] }));
     },
     [swapFile],
@@ -433,11 +441,21 @@ export default function Home() {
             ))}
           </div>
           {sourceTab === "image" ? (
-            <UploadZone
-              onFile={onFile}
-              fileName={file?.name ?? null}
-              imageUrl={imageUrl}
-            />
+            <>
+              <UploadZone
+                onFile={onFile}
+                fileName={sourceInfo?.name ?? file?.name ?? null}
+                imageUrl={imageUrl}
+              />
+              {sourceInfo && (
+                <p className="mt-2 text-center text-xs text-sky-700">
+                  SVG loaded at high resolution
+                  {sourceInfo.colors > 0
+                    ? ` · using the ${sourceInfo.colors} colors declared in the file`
+                    : " · colors detected automatically (traced file)"}
+                </p>
+              )}
+            </>
           ) : (
             <>
               <TextMaker onFile={onTextFile} />
