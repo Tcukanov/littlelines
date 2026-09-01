@@ -406,7 +406,10 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
         regs = [r for r in regs if id(r) not in buried_ids]
         if not regs:
             continue
-        builder.start_color(_hex(rgb_c))
+        thread_hex = _hex(rgb_c)
+        if cs is not None and cs.thread_hex:
+            thread_hex = cs.thread_hex
+        builder.start_color(thread_hex)
         builder.travel_router = _make_travel_router(
             (color_mask | later_cover[k]).astype(np.uint8), sx, sy,
             s.stitch_len_mm)

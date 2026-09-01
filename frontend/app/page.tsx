@@ -480,8 +480,16 @@ export default function Home() {
           <div className="grid gap-6 md:grid-cols-2">
             <div>
               <div className="mb-2 flex items-center justify-between">
-                <span className="text-sm font-medium text-gray-700">
+                <span className="flex items-center gap-2 text-sm font-medium text-gray-700">
                   Detected colors {analyzing && "…"}
+                  {Object.keys(settings.color_settings).length > 0 && (
+                    <button
+                      onClick={() => set("color_settings", {})}
+                      className="rounded border border-gray-300 px-2 py-0.5 text-[11px] font-normal text-gray-500 hover:bg-gray-50"
+                    >
+                      ↺ reset colors
+                    </button>
+                  )}
                 </span>
                 <span className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700">
                   {sizeLabel}
