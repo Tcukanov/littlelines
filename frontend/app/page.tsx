@@ -602,15 +602,33 @@ export default function Home() {
               suffix="mm"
               onChange={(v) => set("satin_width_mm", v)}
             />
-            <Num
-              label="Fill angle"
-              value={settings.fill_angle_deg}
-              min={0}
-              max={180}
-              step={15}
-              suffix="°"
-              onChange={(v) => set("fill_angle_deg", v)}
-            />
+            <div className="flex flex-col gap-1 text-sm text-gray-600">
+              <span>Fill angle</span>
+              <span className="flex items-center gap-2">
+                <label className="flex items-center gap-1 text-xs">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-indigo-600"
+                    checked={settings.auto_fill_angle}
+                    onChange={(e) => set("auto_fill_angle", e.target.checked)}
+                  />
+                  Auto
+                </label>
+                <input
+                  type="number"
+                  className="w-16 rounded-lg border border-gray-300 px-2 py-1.5 text-gray-800 focus:border-indigo-500 focus:outline-none disabled:opacity-40"
+                  value={settings.fill_angle_deg}
+                  min={0}
+                  max={180}
+                  step={15}
+                  disabled={settings.auto_fill_angle}
+                  onChange={(e) =>
+                    set("fill_angle_deg", Number(e.target.value))
+                  }
+                />
+                <span className="text-xs text-gray-400">°</span>
+              </span>
+            </div>
             <Num
               label="Pull compensation"
               value={settings.pull_comp_mm}

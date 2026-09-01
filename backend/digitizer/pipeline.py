@@ -304,18 +304,41 @@ def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
             return
         stitch = "fill"  # fallback when no usable centerline found
 
-    # Tatami fill.
+    # Tatami fill. With auto angle, stitch along the shape's long axis —
+    # the per-region variation built-in machine patterns have.
+    angle = s.fill_angle_deg
+    if s.auto_fill_angle:
+        angle = _region_angle(r.mask, default=s.fill_angle_deg)
     if s.underlay:
         under = fills.scanline_fill(
-            polys_mm, s.fill_angle_deg + 90.0, spacing=2.5,
+            polys_mm, angle + 90.0, spacing=2.5,
             stitch_len=3.5, pull_comp=0.0, inset=0.4)
         for run in under:
             builder.add_run(run)
     top = fills.scanline_fill(
-        polys_mm, s.fill_angle_deg, spacing=s.density_mm,
+        polys_mm, angle, spacing=s.density_mm,
         stitch_len=s.stitch_len_mm, pull_comp=s.pull_comp_mm)
     for run in top:
         builder.add_run(run)
+
+
+def _region_angle(mask: np.ndarray, default: float) -> float:
+    """Orientation of the region's major axis via image moments.
+    Falls back to the default for round-ish shapes with no clear axis."""
+    import math
+    m = cv2.moments(mask, binaryImage=True)
+    if m["m00"] <= 0:
+        return default
+    mu20 = m["mu20"] / m["m00"]
+    mu02 = m["mu02"] / m["m00"]
+    mu11 = m["mu11"] / m["m00"]
+    denom = mu20 + mu02
+    if denom <= 0:
+        return default
+    eccentricity = math.hypot(mu20 - mu02, 2 * mu11) / denom
+    if eccentricity < 0.18:
+        return default
+    return math.degrees(0.5 * math.atan2(2 * mu11, mu20 - mu02))
 
 
 def _satin_run(path_mm: np.ndarray, widths, s: Settings):

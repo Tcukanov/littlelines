@@ -32,6 +32,7 @@ export interface AppSettings {
   stitch_len_mm: number;
   satin_width_mm: number;
   fill_angle_deg: number;
+  auto_fill_angle: boolean;
   underlay: boolean;
   pull_comp_mm: number;
   trim_enabled: boolean;
@@ -52,6 +53,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   stitch_len_mm: 3,
   satin_width_mm: 2.5,
   fill_angle_deg: 45,
+  auto_fill_angle: true,
   underlay: true,
   pull_comp_mm: 0.15,
   trim_enabled: true,
