@@ -6,6 +6,7 @@ encoding are deleted immediately, nothing is ever stored.
 from __future__ import annotations
 
 import json
+import os
 import re
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -17,9 +18,14 @@ from digitizer.params import Settings
 
 app = FastAPI(title="PNG to DST")
 
+# Extra origins (e.g. a deployed frontend) via env:
+#   ALLOWED_ORIGINS=https://myapp.vercel.app,https://other.example
+_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+_origins += [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",")
+             if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
