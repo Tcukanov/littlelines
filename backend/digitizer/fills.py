@@ -79,6 +79,11 @@ def satin_along_path(path: Path, widths, spacing: float,
         w = np.interp(np.linspace(0, 1, n),
                       np.linspace(0, 1, len(src)), src)
     w = np.maximum(w, min_width)
+    if len(w) >= 7:
+        # Smooth width jitter so satin columns get steady, clean edges.
+        w = np.convolve(w, np.ones(5) / 5.0, mode="same")
+        w[:2] = w[2]
+        w[-2:] = w[-3]
 
     # Tangents -> unit normals.
     tang = np.gradient(center, axis=0)
@@ -87,12 +92,13 @@ def satin_along_path(path: Path, widths, spacing: float,
     lens[lens < 1e-9] = 1.0
     norm /= lens
 
+    # True zigzag: ONE alternating penetration per sample. Emitting both
+    # sides per sample makes a square-wave "ladder" with visible gaps.
     out = []
     side = 1.0
     for i in range(n):
         out.append(center[i] + norm[i] * (w[i] / 2.0) * side)
-        out.append(center[i] - norm[i] * (w[i] / 2.0) * side)
-        side *= -1.0  # keeps zig direction consistent
+        side *= -1.0
     return dedupe(np.array(out), 0.05)
 
 

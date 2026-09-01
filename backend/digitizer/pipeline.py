@@ -690,7 +690,10 @@ def _region_angle(mask: np.ndarray, default: float) -> float:
 
 
 def _satin_run(path_mm: np.ndarray, widths, s: Settings):
-    zig = fills.satin_along_path(path_mm, widths, spacing=s.density_mm)
+    # Alternating zigzag: same-side pitch is 2x the sample spacing, so
+    # sample at half density to hit the configured density on each edge.
+    zig = fills.satin_along_path(path_mm, widths,
+                                 spacing=max(0.15, s.density_mm * 0.5))
     if zig is None:
         return None
     if s.underlay:
