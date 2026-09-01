@@ -181,7 +181,8 @@ def order_paths(paths: List[Tuple[np.ndarray, np.ndarray]]
     return ordered
 
 
-def graph_walk(paths: List[Tuple[np.ndarray, np.ndarray]]
+def graph_walk(paths: List[Tuple[np.ndarray, np.ndarray]],
+               start_near=None
                ) -> List[Tuple[np.ndarray, np.ndarray, bool]]:
     """Traverse the stroke network like a commercial digitizer: DFS over the
     graph of strokes, stitching each branch on first visit and traveling
@@ -218,17 +219,33 @@ def graph_walk(paths: List[Tuple[np.ndarray, np.ndarray]]
         adj.setdefault(a, []).append((eid, b, True))
         adj.setdefault(b, []).append((eid, a, False))
 
-    used = [False] * len(paths)
-    seen = set()
-    components: List[List[Tuple[np.ndarray, np.ndarray, bool]]] = []
-
+    # Group nodes into connected components first (node-level BFS), so we
+    # can pick each component's DFS root as the node nearest the needle —
+    # the walk then STARTS right where the previous piece ended, letting
+    # short connector stitches replace jumps between adjacent pieces.
+    node_comp = {}
+    comp_nodes: List[List[int]] = []
     for start in adj:
-        if start in seen:
+        if start in node_comp:
             continue
+        cid = len(comp_nodes)
+        queue = [start]
+        node_comp[start] = cid
+        members = [start]
+        while queue:
+            nd = queue.pop()
+            for _, other, _ in adj[nd]:
+                if other not in node_comp:
+                    node_comp[other] = cid
+                    members.append(other)
+                    queue.append(other)
+        comp_nodes.append(members)
+
+    used = [False] * len(paths)
+
+    def walk_component(root) -> List[Tuple[np.ndarray, np.ndarray, bool]]:
         segs: List[Tuple[np.ndarray, np.ndarray, bool]] = []
-        # frame: [node, next-edge-index, entry_eid, entry_forward]
-        stack = [[start, 0, None, None]]
-        seen.add(start)
+        stack = [[root, 0, None, None]]
         while stack:
             frame = stack[-1]
             node, idx = frame[0], frame[1]
@@ -246,7 +263,6 @@ def graph_walk(paths: List[Tuple[np.ndarray, np.ndarray]]
                     segs.append((pts, w, False))
                 else:
                     segs.append((pts[::-1], w[::-1], False))
-                seen.add(other)
                 stack.append([other, 0, eid, fwd])
                 advanced = True
                 break
@@ -260,25 +276,33 @@ def graph_walk(paths: List[Tuple[np.ndarray, np.ndarray]]
                         segs.append((pts[::-1], w[::-1], True))
                     else:
                         segs.append((pts, w, True))
-        if segs:
-            components.append(segs)
+        return segs
 
-    # Visit components nearest-first so hops between separate pieces stay
-    # short (arbitrary order was producing 50 mm jumps across the design).
     out: List[Tuple[np.ndarray, np.ndarray, bool]] = []
-    pos = None
-    while components:
-        if pos is None:
-            comp = components.pop(0)
-        else:
-            best, best_d = 0, float("inf")
-            for i, c in enumerate(components):
-                d = float(np.linalg.norm(c[0][0][0] - pos))
+    remaining = list(range(len(comp_nodes)))
+    pos = None if start_near is None else np.asarray(start_near, float)
+    while remaining:
+        # Nearest component AND its nearest node to the current position.
+        best_ci, best_node, best_d = remaining[0], comp_nodes[remaining[0]][0], \
+            float("inf")
+        for ci in remaining:
+            for nd in comp_nodes[ci]:
+                if pos is None:
+                    d = 0.0 if ci == remaining[0] else 1.0
+                else:
+                    d = float(np.hypot(node_xy[nd][0] - pos[0],
+                                       node_xy[nd][1] - pos[1]))
                 if d < best_d:
-                    best, best_d = i, d
-            comp = components.pop(best)
-        out.extend(comp)
-        pos = comp[-1][0][-1]
+                    best_ci, best_node, best_d = ci, nd, d
+            if pos is None:
+                break
+        remaining.remove(best_ci)
+        segs = walk_component(best_node)
+        if segs:
+            out.extend(segs)
+            pos = segs[-1][0][-1]
+        elif pos is None:
+            pos = np.array(node_xy[best_node])
     return out
 
 

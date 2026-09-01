@@ -224,6 +224,7 @@ export default function Home() {
         ...(meta.satinWidthMm
           ? { satin_width_mm: Math.max(s.satin_width_mm, meta.satinWidthMm) }
           : {}),
+        walk_connector_mm: meta.connectorMm ?? 2.5,
       }));
     },
     [swapFile],

@@ -108,6 +108,7 @@ async def digitize(file: UploadFile = File(...), settings: str = Form("{}")):
                      for c, x, y in plan.events],
         "stats": stats,
         "warnings": warnings,
+        "stops": plan.stops,
     }
 
 

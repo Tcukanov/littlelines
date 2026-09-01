@@ -162,6 +162,7 @@ def digitize(data: bytes, settings: Settings) -> Tuple[Plan, dict, List[str]]:
         trim_enabled=settings.trim_enabled,
         trim_threshold_mm=settings.trim_threshold_mm,
         auto_color_change=settings.auto_color_change,
+        walk_mm=settings.walk_connector_mm,
     )
 
     if settings.line_art:
@@ -467,9 +468,11 @@ def _make_travel_router(mask: np.ndarray, sx: float, sy: float,
         a = snap(to_cell(a_mm))
         b = snap(to_cell(b_mm))
         if a is None or b is None:
+            router.reason = "SNAP_FAIL"
             return None
         if comp_labels[a] != comp_labels[b]:
-            return None  # different islands: no hidden route exists
+            router.reason = "SEPARATE_ISLAND"
+            return None
         straight = float(np.hypot(b_mm[0] - a_mm[0], b_mm[1] - a_mm[1]))
         q = deque([a])
         parent = {a: None}
@@ -488,6 +491,7 @@ def _make_travel_router(mask: np.ndarray, sx: float, sy: float,
                     parent[(ny, nx)] = cur
                     q.append((ny, nx))
         if not found:
+            router.reason = "NO_ROUTE"
             return None
         cells = []
         cur = b
@@ -507,6 +511,7 @@ def _make_travel_router(mask: np.ndarray, sx: float, sy: float,
         else:
             max_len = max(80.0, straight * 2.0)
         if fills.path_length(path) > max_len:
+            router.reason = "ROUTE_TOO_LONG"
             return None
         return fills.resample_path(path, min(stitch_len_mm, 2.5))
 
@@ -601,8 +606,11 @@ def _satin_network(builder: PlanBuilder, mask: np.ndarray, s: Settings,
     if mask.sum() == 0:
         return False
     paths = lineart.centerline_paths(mask, min_len_px=2.0)
+    start_near = None
+    if builder.pos is not None:
+        start_near = (builder.pos[0] / sx, builder.pos[1] / sy)
     emitted = False
-    for pts_px, widths_px, retrace in lineart.graph_walk(paths):
+    for pts_px, widths_px, retrace in lineart.graph_walk(paths, start_near):
         path_mm = pts_px * np.array([sx, sy])
         if retrace or fills.path_length(path_mm) < 1.2:
             # Travel back along the stitched branch (or a tiny nub):

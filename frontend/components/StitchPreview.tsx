@@ -1,12 +1,23 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CMD_COLOR_CHANGE,
   CMD_JUMP,
   CMD_STITCH,
   DigitizeResult,
+  StopInfo,
 } from "@/lib/types";
+
+const REASONS: Record<string, string> = {
+  SEPARATE_ISLAND:
+    "this piece is separate — bare fabric on all sides, no hidden route exists (a professional file would also stop here)",
+  NO_ROUTE: "no connected path found through the stitchable area",
+  ROUTE_TOO_LONG: "a hidden route exists but is too long to be safe",
+  SNAP_FAIL: "the connection point sits off the artwork",
+  NO_ROUTER: "no routing context for this move",
+  COLOR_CHANGE: "thread color change",
+};
 
 interface Props {
   result: DigitizeResult;
@@ -24,6 +35,8 @@ export default function StitchPreview({ result }: Props) {
   const viewRef = useRef<View>({ scale: 4, ox: 0, oy: 0 });
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const fitScaleRef = useRef(4);
+  const movedRef = useRef(false);
+  const [selectedStop, setSelectedStop] = useState<StopInfo | null>(null);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -161,6 +174,25 @@ export default function StitchPreview({ result }: Props) {
       ctx.fill(dots);
     }
 
+    // Stop markers (clickable): trims red, jumps amber, changes blue.
+    for (const s of result.stops ?? []) {
+      const px = X(s.x);
+      const py = Y(s.y);
+      if (px < -10 || px > w + 10 || py < -10 || py > h + 10) continue;
+      ctx.beginPath();
+      ctx.arc(px, py, selectedStop === s ? 7 : 4.5, 0, Math.PI * 2);
+      ctx.fillStyle =
+        s.kind === "trim"
+          ? "rgba(220, 60, 60, 0.9)"
+          : s.kind === "jump"
+            ? "rgba(235, 160, 40, 0.9)"
+            : "rgba(90, 110, 235, 0.9)";
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "#fff";
+      ctx.stroke();
+    }
+
     // Start / end markers
     const first = result.stitches.find(
       (s) => s[0] === CMD_STITCH || s[0] === CMD_JUMP,
@@ -192,7 +224,7 @@ export default function StitchPreview({ result }: Props) {
     ctx.fillStyle = "#333";
     ctx.font = "11px sans-serif";
     ctx.fillText("10 mm", 18, h - 22);
-  }, [result]);
+  }, [result, selectedStop]);
 
   const fit = useCallback(() => {
     const wrap = wrapRef.current;
@@ -280,16 +312,38 @@ export default function StitchPreview({ result }: Props) {
         className="h-full w-full cursor-grab active:cursor-grabbing"
         onPointerDown={(e) => {
           dragRef.current = { x: e.clientX, y: e.clientY };
+          movedRef.current = false;
           (e.target as HTMLElement).setPointerCapture(e.pointerId);
         }}
         onPointerMove={(e) => {
           if (!dragRef.current) return;
-          viewRef.current.ox += e.clientX - dragRef.current.x;
-          viewRef.current.oy += e.clientY - dragRef.current.y;
+          const dx = e.clientX - dragRef.current.x;
+          const dy = e.clientY - dragRef.current.y;
+          if (Math.abs(dx) + Math.abs(dy) > 3) movedRef.current = true;
+          viewRef.current.ox += dx;
+          viewRef.current.oy += dy;
           dragRef.current = { x: e.clientX, y: e.clientY };
           draw();
         }}
-        onPointerUp={() => (dragRef.current = null)}
+        onPointerUp={(e) => {
+          dragRef.current = null;
+          if (movedRef.current) return;
+          // Click: select the nearest stop marker.
+          const rect = (e.target as HTMLElement).getBoundingClientRect();
+          const mx = e.clientX - rect.left;
+          const my = e.clientY - rect.top;
+          const { scale, ox, oy } = viewRef.current;
+          let best: StopInfo | null = null;
+          let bestD = 12;
+          for (const s of result.stops ?? []) {
+            const d = Math.hypot(ox + s.x * scale - mx, oy + s.y * scale - my);
+            if (d < bestD) {
+              bestD = d;
+              best = s;
+            }
+          }
+          setSelectedStop(best);
+        }}
       />
       <div className="absolute right-3 top-3 flex overflow-hidden rounded-lg border border-gray-300 bg-white text-xs text-gray-600 shadow-sm">
         <button onClick={fit} className="px-3 py-1 hover:bg-gray-100">
@@ -315,9 +369,25 @@ export default function StitchPreview({ result }: Props) {
         </button>
       </div>
       <div className="pointer-events-none absolute bottom-3 right-3 rounded bg-white/80 px-2 py-1 text-[10px] text-gray-500">
-        scroll = zoom · drag = pan · <span className="text-green-600">●</span>{" "}
-        start · <span className="text-red-600">●</span> end · ▪▪ jump
+        scroll = zoom · drag = pan · click a{" "}
+        <span className="text-red-600">●</span>
+        <span className="text-amber-500">●</span> stop marker for details
       </div>
+      {selectedStop && (
+        <div className="absolute bottom-3 left-3 max-w-md rounded-lg border border-gray-300 bg-white/95 px-3 py-2 text-xs text-gray-700 shadow">
+          <b>
+            {selectedStop.kind === "trim"
+              ? "✂ Trim"
+              : selectedStop.kind === "jump"
+                ? "→ Jump"
+                : "● Color change"}
+          </b>
+          {selectedStop.gap > 0 && <> · {selectedStop.gap} mm move</>}
+          <div className="mt-0.5 text-gray-500">
+            {REASONS[selectedStop.reason] ?? selectedStop.reason}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

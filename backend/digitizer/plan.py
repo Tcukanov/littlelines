@@ -18,18 +18,20 @@ CMD_TRIM = 3
 class Plan:
     events: List[Tuple[int, float, float]] = field(default_factory=list)
     threads: List[str] = field(default_factory=list)  # hex colors in order
+    stops: List[dict] = field(default_factory=list)   # jump/trim diagnostics
 
 
 class PlanBuilder:
     def __init__(self, max_stitch_mm: float, max_jump_mm: float,
                  trim_enabled: bool, trim_threshold_mm: float,
-                 auto_color_change: bool):
+                 auto_color_change: bool, walk_mm: float = 2.5):
         self.plan = Plan()
         self.max_stitch = max_stitch_mm
         self.max_jump = max_jump_mm
         self.trim_enabled = trim_enabled
         self.trim_threshold = trim_threshold_mm
         self.auto_color_change = auto_color_change
+        self.walk_mm = walk_mm
         self.pos: Optional[np.ndarray] = None
         self._color_started = False
         self._needs_tie_in = True  # thread not anchored yet
@@ -54,6 +56,9 @@ class PlanBuilder:
                 p = self.pos if self.pos is not None else np.zeros(2)
                 self.plan.events.append(
                     (CMD_COLOR_CHANGE, float(p[0]), float(p[1])))
+                self.plan.stops.append(dict(
+                    kind="color_change", x=float(p[0]), y=float(p[1]),
+                    gap=0.0, reason="COLOR_CHANGE"))
                 self.plan.threads.append(hex_color)
                 self._needs_tie_in = True
             # else: same thread keeps running, no event
@@ -70,7 +75,7 @@ class PlanBuilder:
         if self.pos is not None:
             gap = float(np.linalg.norm(pts[0] - self.pos))
             if gap > 0.8:
-                if gap <= 2.5:
+                if gap <= self.walk_mm:
                     # Walk stitches instead of a jump: a short connector is
                     # invisible but saves a full machine stop/start cycle.
                     self._emit_move(CMD_STITCH, pts[0], self.max_stitch)
@@ -85,7 +90,18 @@ class PlanBuilder:
                             self._emit_move(CMD_STITCH, np.asarray(p),
                                             self.max_stitch)
                     else:
-                        if self.trim_enabled and gap > self.trim_threshold:
+                        reason = "NO_ROUTER"
+                        if self.travel_router is not None:
+                            reason = getattr(self.travel_router, "reason",
+                                             "NO_ROUTE")
+                        trimmed = (self.trim_enabled
+                                   and gap > self.trim_threshold)
+                        self.plan.stops.append(dict(
+                            kind="trim" if trimmed else "jump",
+                            x=float(pts[0][0]), y=float(pts[0][1]),
+                            fx=float(self.pos[0]), fy=float(self.pos[1]),
+                            gap=round(gap, 1), reason=reason))
+                        if trimmed:
                             self._lock(self.pos)  # tie-off before the cut
                             self.plan.events.append(
                                 (CMD_TRIM, float(self.pos[0]),
@@ -131,6 +147,12 @@ class PlanBuilder:
             cx = (min(xs) + max(xs)) / 2.0
             cy = (min(ys) + max(ys)) / 2.0
             plan.events = [(c, x - cx, y - cy) for c, x, y in plan.events]
+            for st in plan.stops:
+                st["x"] = round(st["x"] - cx, 2)
+                st["y"] = round(st["y"] - cy, 2)
+                if "fx" in st:
+                    st["fx"] = round(st["fx"] - cx, 2)
+                    st["fy"] = round(st["fy"] - cy, 2)
             width = max(xs) - min(xs)
             height = max(ys) - min(ys)
         else:

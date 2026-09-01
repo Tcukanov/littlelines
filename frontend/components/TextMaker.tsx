@@ -6,6 +6,7 @@ export interface TextMeta {
   recommendedWidthMm?: number;
   singleColor: boolean;
   satinWidthMm?: number;
+  connectorMm?: number;
 }
 
 interface Props {
@@ -155,6 +156,7 @@ export default function TextMaker({ onFile }: Props) {
   const [italic, setItalic] = useState(false);
   const [color, setColor] = useState("#1a2a52");
   const [outline, setOutline] = useState(false);
+  const [connect, setConnect] = useState(true);
   const [arch, setArch] = useState(0);
   const [preview, setPreview] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -202,9 +204,10 @@ export default function TextMaker({ onFile }: Props) {
         recommendedWidthMm: recommendedWidth(),
         singleColor: true,
         satinWidthMm: 7, // lettering strokes stay satin, not fill
+        connectorMm: connect ? 5 : undefined,
       });
     }, "image/png");
-  }, [onFile, text, recommendedWidth]);
+  }, [onFile, text, recommendedWidth, connect]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -254,6 +257,15 @@ export default function TextMaker({ onFile }: Props) {
             className="h-4 w-4 accent-indigo-600"
           />
           🏈 Varsity outline
+        </label>
+        <label className="flex items-center gap-1.5 text-sm text-gray-700">
+          <input
+            type="checkbox"
+            checked={connect}
+            onChange={(e) => setConnect(e.target.checked)}
+            className="h-4 w-4 accent-indigo-600"
+          />
+          Connect letters
         </label>
         <label className="flex items-center gap-2 text-sm text-gray-700">
           Thread color

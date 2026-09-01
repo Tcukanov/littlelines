@@ -49,6 +49,7 @@ class Settings:
     trim_enabled: bool = True
     auto_color_change: bool = True
     # Line art mode
+    walk_connector_mm: float = 2.5  # max visible connector stitch
     line_art: bool = False
     line_passes: int = 2        # 1 | 2 | 3
     # Per-color overrides, keyed by palette index
@@ -80,6 +81,7 @@ class Settings:
         s.pull_comp_mm = _f(d, "pull_comp_mm", 0.15, 0.0, 1.0)
         s.trim_enabled = _b(d, "trim_enabled", True)
         s.auto_color_change = _b(d, "auto_color_change", True)
+        s.walk_connector_mm = _f(d, "walk_connector_mm", 2.5, 0.5, 6.0)
         s.line_art = _b(d, "line_art", False)
         s.line_passes = _i(d, "line_passes", 2, 1, 3)
         import re as _re

@@ -41,6 +41,7 @@ export interface AppSettings {
   line_passes: number;
   color_settings: Record<number, ColorSetting>;
   palette_hint: string[];
+  walk_connector_mm: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -63,6 +64,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   line_passes: 2,
   color_settings: {},
   palette_hint: [],
+  walk_connector_mm: 2.5,
 };
 
 // Stitch event commands (must match backend plan.py)
@@ -82,9 +84,20 @@ export interface Stats {
   est_minutes: number;
 }
 
+export interface StopInfo {
+  kind: "trim" | "jump" | "color_change";
+  x: number;
+  y: number;
+  fx?: number;
+  fy?: number;
+  gap: number;
+  reason: string;
+}
+
 export interface DigitizeResult {
   threads: string[];
   stitches: [number, number, number][]; // [cmd, x_mm, y_mm]
   stats: Stats;
   warnings: string[];
+  stops?: StopInfo[];
 }
