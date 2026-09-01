@@ -221,24 +221,33 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
 
     # Collect all colors first so we can pick a good stitching order:
     # large fill areas go down first, thin outline-like colors go last so
-    # they cover the seams between fills.
+    # they cover the seams between fills. If the small-object threshold
+    # would wipe (nearly) everything — dense fine-detail artwork — relax it
+    # rather than emitting an empty design.
+    occupied_px = max(int((label_map >= 0).sum()), 1)
     entries = []
-    for idx, rgb_c in enumerate(palette):
-        cs = s.color_settings.get(idx)
-        if cs is not None and not cs.enabled:
-            continue
-        regs = regions.extract_regions(label_map, idx, min_area_px, s.detail,
-                                       mm_per_px)
-        if not regs:
-            continue
-        votes: dict = {}
-        total_px = 0
-        for r in regs:
-            sug = regions.suggest_stitch(r, mm_per_px, s.satin_width_mm)
-            votes[sug] = votes.get(sug, 0) + r.area_px
-            total_px += r.area_px
-        major = max(votes, key=votes.get)
-        entries.append((idx, rgb_c, regs, cs, major, total_px))
+    for attempt_area in (min_area_px, min_area_px / 5.0, 4.0):
+        entries = []
+        for idx, rgb_c in enumerate(palette):
+            cs = s.color_settings.get(idx)
+            if cs is not None and not cs.enabled:
+                continue
+            regs = regions.extract_regions(label_map, idx, attempt_area,
+                                           s.detail, mm_per_px)
+            if not regs:
+                continue
+            votes: dict = {}
+            total_px = 0
+            for r in regs:
+                sug = regions.suggest_stitch(r, mm_per_px, s.satin_width_mm)
+                votes[sug] = votes.get(sug, 0) + r.area_px
+                total_px += r.area_px
+            major = max(votes, key=votes.get)
+            entries.append((idx, rgb_c, regs, cs, major, total_px))
+        kept_px = sum(e[5] for e in entries)
+        if kept_px >= 0.55 * occupied_px:
+            min_area_px = attempt_area
+            break
 
     entries.sort(key=lambda e: (0 if e[4] == "fill" else 1, -e[5]))
 
@@ -435,6 +444,9 @@ def _make_travel_router(mask: np.ndarray, sx: float, sy: float,
     grid = (cv2.dilate(mask, np.ones((5, 5), np.uint8)) > 0)[::2, ::2]
     strict = (mask > 0)[::2, ::2]
     h, w = grid.shape
+    # Component labels let us reject unroutable pairs in O(1) instead of
+    # exhausting the BFS budget on every impossible route.
+    _, comp_labels = cv2.connectedComponents(grid.astype(np.uint8), 4)
 
     def to_cell(p):
         return (min(h - 1, max(0, int(round(p[1] / sy / 2)))),
@@ -456,6 +468,8 @@ def _make_travel_router(mask: np.ndarray, sx: float, sy: float,
         b = snap(to_cell(b_mm))
         if a is None or b is None:
             return None
+        if comp_labels[a] != comp_labels[b]:
+            return None  # different islands: no hidden route exists
         straight = float(np.hypot(b_mm[0] - a_mm[0], b_mm[1] - a_mm[1]))
         q = deque([a])
         parent = {a: None}

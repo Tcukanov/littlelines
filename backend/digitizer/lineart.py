@@ -15,8 +15,22 @@ Pixel = Tuple[int, int]  # (x, y)
 
 def skeletonize(img: np.ndarray) -> np.ndarray:
     """Guo-Hall thinning, vectorized in NumPy (replaces scikit-image).
-    Chosen over Zhang-Suen, which leaves 2-px staircases on diagonals."""
-    skel = (img > 0).astype(np.uint8)
+    Chosen over Zhang-Suen, which leaves 2-px staircases on diagonals.
+    Runs on the content bounding box only — masks are often tiny regions
+    inside a large frame."""
+    full = (img > 0)
+    ys, xs = np.nonzero(full)
+    if ys.size == 0:
+        return np.zeros_like(full)
+    y0, y1 = ys.min(), ys.max() + 1
+    x0, x1 = xs.min(), xs.max() + 1
+    out = np.zeros_like(full)
+    out[y0:y1, x0:x1] = _guo_hall(full[y0:y1, x0:x1])
+    return out
+
+
+def _guo_hall(img: np.ndarray) -> np.ndarray:
+    skel = img.astype(np.uint8)
     changed = True
     while changed:
         changed = False

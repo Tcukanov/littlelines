@@ -126,6 +126,7 @@ class PlanBuilder:
         plan = self.plan
         xs = [e[1] for e in plan.events if e[0] in (CMD_STITCH, CMD_JUMP)]
         ys = [e[2] for e in plan.events if e[0] in (CMD_STITCH, CMD_JUMP)]
+        cx = cy = 0.0
         if xs:
             cx = (min(xs) + max(xs)) / 2.0
             cy = (min(ys) + max(ys)) / 2.0
@@ -156,6 +157,9 @@ class PlanBuilder:
             "width_mm": round(width, 1),
             "height_mm": round(height, 1),
             "est_minutes": round(minutes, 1),
+            # Center offset in artwork coordinates (for coverage checks).
+            "cx": round(cx, 2),
+            "cy": round(cy, 2),
         }
 
         warnings = self._validate(plan, width, height, stitches)

@@ -34,7 +34,12 @@ def clean_mask(mask: np.ndarray, detail: int) -> np.ndarray:
     k = smooth_kernel(detail)
     if k > 1:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        total = int(mask.sum())
+        opened = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        # Adaptive: opening erases features thinner than the kernel — on
+        # hairline/fine-detail artwork that can be most of the design.
+        if total == 0 or int(opened.sum()) >= 0.75 * total:
+            mask = opened
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     return mask
 
@@ -61,10 +66,12 @@ def regions_from_mask(mask: np.ndarray, min_area_px: float, detail: int,
                                                cv2.CHAIN_APPROX_SIMPLE)
         polys = []
         for c in contours:
-            if cv2.contourArea(c) < 2:
+            # Hairline strokes have near-zero contour AREA but real length.
+            if cv2.contourArea(c) < 2 and cv2.arcLength(c, True) < 12:
                 continue
             ap = cv2.approxPolyDP(c, eps, True).reshape(-1, 2)
-            if ap.shape[0] >= 3:
+            # Hairline shapes legitimately collapse to 2-point contours.
+            if ap.shape[0] >= 2:
                 polys.append(ap.astype(np.float64))
         if not polys:
             continue

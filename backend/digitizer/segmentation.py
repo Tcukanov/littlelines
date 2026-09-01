@@ -13,9 +13,15 @@ MAX_DIM = 900  # working resolution
 
 def load_image(data: bytes) -> Tuple[np.ndarray, np.ndarray]:
     """Return (rgb uint8 HxWx3 composited on white, alpha uint8 HxW)."""
+    Image.MAX_IMAGE_PIXELS = 400_000_000
     img = Image.open(io.BytesIO(data))
     img = img.convert("RGBA")
     w, h = img.size
+    if w * h > 4_000_000:
+        # Cheap box-filter pre-reduction so huge uploads don't stall LANCZOS.
+        factor = max(2, int(((w * h) / 4_000_000) ** 0.5))
+        img = img.reduce(factor)
+        w, h = img.size
     scale = min(1.0, MAX_DIM / max(w, h))
     if scale < 1.0:
         img = img.resize((max(1, round(w * scale)), max(1, round(h * scale))),
@@ -38,15 +44,27 @@ def foreground_mask(rgb: np.ndarray, alpha: np.ndarray,
     if has_alpha:
         fg = alpha >= 128
         # Shave the matte edge: cut-out PNGs carry a 1-3 px light halo that
-        # digitizes into ugly slivers around every shape.
-        fg = cv2.erode(fg.astype(np.uint8), np.ones((3, 3), np.uint8),
-                       iterations=2).astype(bool)
+        # digitizes into ugly slivers around every shape. ADAPTIVE: thin
+        # line art would be destroyed by the shave, so back off when the
+        # erosion removes too much of the artwork.
+        fg = _adaptive_shave(fg, iterations=2)
     else:
         fg = np.ones((h, w), bool)
         if remove_background:
             fg &= ~_border_flood(rgb, fg)
-            fg = cv2.erode(fg.astype(np.uint8), np.ones((3, 3), np.uint8),
-                           iterations=1).astype(bool)
+            fg = _adaptive_shave(fg, iterations=1)
+    return fg
+
+
+def _adaptive_shave(fg: np.ndarray, iterations: int) -> np.ndarray:
+    total = int(fg.sum())
+    if total == 0:
+        return fg
+    k = np.ones((3, 3), np.uint8)
+    for it in range(iterations, 0, -1):
+        shaved = cv2.erode(fg.astype(np.uint8), k, iterations=it)
+        if int(shaved.sum()) >= 0.72 * total:
+            return shaved.astype(bool)
     return fg
 
 
@@ -68,7 +86,17 @@ def _border_flood(rgb: np.ndarray, fg: np.ndarray) -> np.ndarray:
 def crop_to_foreground(rgb: np.ndarray, alpha: np.ndarray, fg: np.ndarray,
                        margin: int = 2):
     """Crop all arrays to the artwork bounding box so the requested output
-    size applies to the artwork itself, not the canvas."""
+    size applies to the artwork itself, not the canvas. Stray specks are
+    ignored for the bbox so junk pixels can't inflate the design size."""
+    fg_u8 = fg.astype(np.uint8)
+    n, comp, stats, _ = cv2.connectedComponentsWithStats(fg_u8, 8)
+    if n > 2:
+        clean = np.zeros_like(fg_u8)
+        for ci in range(1, n):
+            if stats[ci][4] >= 16:
+                clean[comp == ci] = 1
+        if clean.any():
+            fg = clean.astype(bool)
     ys, xs = np.nonzero(fg)
     if xs.size == 0:
         return rgb, alpha, fg
@@ -151,7 +179,7 @@ def quantize(rgb: np.ndarray, fg: np.ndarray, max_colors: int,
     for i in order:
         sel = pts_rgb[assign == i]
         c = sel.mean(axis=0) if len(sel) else np.zeros(3)
-        palette.append(tuple(int(round(v)) for v in c))
+        palette.append(tuple(min(255, max(0, int(round(v)))) for v in c))
     return label_map, palette
 
 
@@ -189,7 +217,7 @@ def collapse_antialias_colors(label_map: np.ndarray, palette,
     if total == 0:
         return label_map, palette
     counts = [int((label_map == i).sum()) for i in range(n)]
-    arr = np.array(palette, np.uint8).reshape(1, -1, 3)
+    arr = np.clip(np.array(palette, np.float32), 0, 255).astype(np.uint8).reshape(1, -1, 3)
     lab_pal = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB).reshape(-1, 3) \
         .astype(np.float32)
 
@@ -251,12 +279,13 @@ def absorb_small_regions(label_map: np.ndarray, min_area_px: float,
     intentional detail — it becomes a hole (background) so the
     surrounding fill leaves it open, instead of being painted over.
     """
+    initial_fg = int((label_map >= 0).sum())
     lm = label_map.copy()
     n_colors = int(lm.max()) + 1
     k3 = np.ones((3, 3), np.uint8)
     lab_palette = None
     if palette is not None and len(palette) > 0:
-        arr = np.array(palette, np.uint8).reshape(1, -1, 3)
+        arr = np.clip(np.array(palette, np.float32), 0, 255).astype(np.uint8).reshape(1, -1, 3)
         lab_palette = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB).reshape(-1, 3) \
             .astype(np.float32)
     for _ in range(2):
@@ -311,6 +340,14 @@ def absorb_small_regions(label_map: np.ndarray, min_area_px: float,
                 changed = True
         if not changed:
             break
+    removed = initial_fg - int((lm >= 0).sum())
+    if initial_fg > 0 and removed > 0.30 * initial_fg:
+        # Cleanup would erase much of the artwork (dense fine detail):
+        # retry gently; if still destructive, keep the original.
+        if min_area_px > 4:
+            return absorb_small_regions(label_map, min_area_px / 5.0,
+                                        min_thick_px * 0.5, palette, keep_px)
+        return label_map
     return lm
 
 
