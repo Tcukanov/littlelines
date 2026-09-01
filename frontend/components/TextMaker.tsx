@@ -231,7 +231,7 @@ async function renderText(
 export default function TextMaker({ onFile }: Props) {
   const [text, setText] = useState("");
   const [font, setFont] = useState(FONTS[0]);
-  const [bold, setBold] = useState(true);
+  const [bold, setBold] = useState(false); // faux-bold smears script fonts
   const [italic, setItalic] = useState(false);
   const [color, setColor] = useState("#1a2a52");
   const [outline, setOutline] = useState(false);
@@ -327,6 +327,9 @@ export default function TextMaker({ onFile }: Props) {
             className="h-4 w-4 accent-indigo-600"
           />
           <b>Bold</b>
+          <span className="text-xs text-slate-400">
+            (script fonts stitch best without it)
+          </span>
         </label>
         <label className="flex items-center gap-1.5 text-sm text-gray-700">
           <input
