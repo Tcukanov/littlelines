@@ -32,17 +32,27 @@ class PlanBuilder:
         self.auto_color_change = auto_color_change
         self.pos: Optional[np.ndarray] = None
         self._color_started = False
+        self._needs_tie_in = True  # thread not anchored yet
+
+    def _lock(self, p: np.ndarray) -> None:
+        """Tie stitches: 3 tiny stitches so the thread can't pull loose."""
+        for dx in (0.4, -0.4, 0.0):
+            self.plan.events.append(
+                (CMD_STITCH, float(p[0] + dx), float(p[1])))
 
     def start_color(self, hex_color: str) -> None:
         if self._color_started:
             if self.auto_color_change:
-                if self.trim_enabled and self.pos is not None:
-                    self.plan.events.append(
-                        (CMD_TRIM, float(self.pos[0]), float(self.pos[1])))
+                if self.pos is not None:
+                    self._lock(self.pos)  # tie-off before the cut
+                    if self.trim_enabled:
+                        self.plan.events.append(
+                            (CMD_TRIM, float(self.pos[0]), float(self.pos[1])))
                 p = self.pos if self.pos is not None else np.zeros(2)
                 self.plan.events.append(
                     (CMD_COLOR_CHANGE, float(p[0]), float(p[1])))
                 self.plan.threads.append(hex_color)
+                self._needs_tie_in = True
             # else: same thread keeps running, no event
         else:
             self.plan.threads.append(hex_color)
@@ -58,9 +68,15 @@ class PlanBuilder:
             gap = float(np.linalg.norm(pts[0] - self.pos))
             if gap > 0.8:
                 if self.trim_enabled and gap > self.trim_threshold:
+                    self._lock(self.pos)  # tie-off before the cut
                     self.plan.events.append(
                         (CMD_TRIM, float(self.pos[0]), float(self.pos[1])))
+                    self._needs_tie_in = True
                 self._emit_move(CMD_JUMP, pts[0], self.max_jump)
+        if self._needs_tie_in:
+            self._lock(pts[0])  # tie-in: anchor the new thread start
+            self.pos = pts[0]
+            self._needs_tie_in = False
         if len(pts) == 1:
             self.plan.events.append((CMD_STITCH, float(pts[0][0]),
                                      float(pts[0][1])))
@@ -86,6 +102,8 @@ class PlanBuilder:
         self.pos = np.asarray(target, np.float64)
 
     def finish(self) -> Tuple[Plan, dict, List[str]]:
+        if self.pos is not None:
+            self._lock(self.pos)  # final tie-off before END
         plan = self.plan
         xs = [e[1] for e in plan.events if e[0] in (CMD_STITCH, CMD_JUMP)]
         ys = [e[2] for e in plan.events if e[0] in (CMD_STITCH, CMD_JUMP)]
