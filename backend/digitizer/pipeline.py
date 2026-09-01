@@ -12,7 +12,7 @@ from PIL import Image
 
 from . import fills, lineart, regions, segmentation
 from .params import Settings
-from .plan import Plan, PlanBuilder
+from .plan import CMD_JUMP, CMD_STITCH, Plan, PlanBuilder
 
 
 def _hex(rgb: Tuple[int, int, int]) -> str:
@@ -261,8 +261,12 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
             for r in m_regs:
                 sug = regions.suggest_stitch(r, mm_per_px, s.satin_width_mm)
                 votes0[sug] = votes0.get(sug, 0) + r.area_px
-            entries[0] = (idx0, rgb0, m_regs, cs0,
-                          max(votes0, key=votes0.get), cnt0)
+            major_m = max(votes0, key=votes0.get)
+            # Adopt the closed mask only for FILL bodies. Closing distorts
+            # stroke networks: it fills junction crotches and the skeleton
+            # then shortcuts across them, losing ring segments.
+            if major_m == "fill":
+                entries[0] = (idx0, rgb0, m_regs, cs0, major_m, cnt0)
         entries[1:] = sorted(
             entries[1:], key=lambda e: (0 if e[4] == "fill" else 1, -e[5]))
 
@@ -278,6 +282,7 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
     # Costs one extra color change, saves an island's trim each.
     buried_ids: set = set()
     islands_excl = None
+    prepass_ranges: dict = {}
     if len(entries) >= 2:
         f_idx, f_rgb, f_regs, f_cs, f_major, _ = entries[0]
         f_eff = f_cs.stitch if f_cs is not None and f_cs.stitch != "auto" \
@@ -312,6 +317,7 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
                     idx_c, rgb_c, _, cs_c, _, _ = entries[ei]
                     c_mask = (label_map == idx_c).astype(np.uint8)
                     builder.start_color(_hex(rgb_c))
+                    _prepass_start = len(builder.plan.events)
                     # Everything stitches after this pre-pass, so travel
                     # may run over the whole artwork footprint.
                     builder.travel_router = _make_travel_router(
@@ -325,6 +331,8 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
                         _stitch_region(builder, r, st, s, sx, sy, mm_per_px)
                         islands_mask |= r.mask
                     builder.travel_router = None
+                    prepass_ranges.setdefault(idx_c, []).append(
+                        (_prepass_start, len(builder.plan.events)))
                 excl_px = max(1, int(round(0.3 / max(mm_per_px, 1e-9))))
                 islands_excl = cv2.dilate(
                     islands_mask, np.ones((2 * excl_px + 1,) * 2, np.uint8))
@@ -366,13 +374,52 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
             s.stitch_len_mm)
         regs = _order_regions(regs, builder, sx, sy)
         excl = islands_excl if idx == entries[0][0] else None
+        _main_start = len(builder.plan.events)
         for r in regs:
             stitch = cs.stitch if cs is not None else "auto"
             if stitch == "auto":
                 stitch = regions.suggest_stitch(r, mm_per_px, s.satin_width_mm)
             _stitch_region(builder, r, stitch, s, sx, sy, mm_per_px,
                            exclude=excl)
+        # Verify coverage of this color (incl. buried pre-pass islands) and
+        # patch anything the generators missed.
+        slices = [builder.plan.events[a:b]
+                  for a, b in prepass_ranges.get(idx, [])]
+        slices.append(builder.plan.events[_main_start:])
+        _patch_uncovered(builder, color_mask, slices, s, sx, sy, mm_per_px)
         builder.travel_router = None
+
+
+def _patch_uncovered(builder: PlanBuilder, mask: np.ndarray, event_slices,
+                     s: Settings, sx: float, sy: float,
+                     mm_per_px: float) -> None:
+    """Self-healing coverage check: rasterize what was actually stitched
+    for this color, diff against its mask, and stitch whatever significant
+    area was missed (guards against edge cases in skeleton/walk logic)."""
+    cover = np.zeros_like(mask)
+    th = max(2, int(round(0.8 / max(mm_per_px, 1e-9))))
+    for events in event_slices:
+        prev = None
+        for cmd, x, y in events:
+            if cmd == CMD_STITCH:
+                if prev is not None:
+                    cv2.line(cover,
+                             (int(round(prev[0] / sx)),
+                              int(round(prev[1] / sy))),
+                             (int(round(x / sx)), int(round(y / sy))),
+                             1, thickness=th)
+                prev = (x, y)
+            elif cmd == CMD_JUMP:
+                prev = (x, y)
+    core = cv2.erode(mask, np.ones((3, 3), np.uint8))
+    uncov = (core & (1 - cover)).astype(np.uint8)
+    if not uncov.any():
+        return
+    min_patch_px = 1.5 / max(mm_per_px * mm_per_px, 1e-9)
+    regs = regions.regions_from_mask(uncov, min_patch_px, s.detail, mm_per_px)
+    for r in regs:
+        stitch = regions.suggest_stitch(r, mm_per_px, s.satin_width_mm)
+        _stitch_region(builder, r, stitch, s, sx, sy, mm_per_px)
 
 
 def _make_travel_router(mask: np.ndarray, sx: float, sy: float,
