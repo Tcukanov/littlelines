@@ -71,6 +71,12 @@ export async function exportFile(
   URL.revokeObjectURL(url);
 }
 
+export async function inspectFile(file: File): Promise<DigitizeResult> {
+  const fd = new FormData();
+  fd.append("file", file);
+  return post<DigitizeResult>("/api/inspect", fd);
+}
+
 export async function health(): Promise<boolean> {
   try {
     const res = await fetch(`${API}/api/health`);

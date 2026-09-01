@@ -164,6 +164,8 @@ export default function Home() {
   const [originalFile, setOriginalFile] = useState<File | null>(null);
   const [cleaning, setCleaning] = useState(false);
   const [sourceTab, setSourceTab] = useState<"image" | "text">("image");
+  const [inspectedName, setInspectedName] = useState<string | null>(null);
+  const inspectInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [backendUp, setBackendUp] = useState(true);
   const digitizedOnce = useRef(false);
@@ -309,6 +311,7 @@ export default function Home() {
     try {
       const r = await api.digitize(file, settings);
       setResult(r);
+      setInspectedName(null);
       digitizedOnce.current = true;
     } catch (e) {
       setError((e as Error).message);
@@ -791,7 +794,40 @@ export default function Home() {
           </button>
         </Section>
 
-        <Section step={4} title="Stitch preview" dimmed={!result}>
+        <Section step={4} title="Stitch preview" dimmed={false}>
+          <div className="mb-3 flex items-center justify-end gap-2">
+            {inspectedName && (
+              <span className="text-xs font-medium text-violet-600">
+                viewing imported file: {inspectedName}
+              </span>
+            )}
+            <button
+              onClick={() => inspectInputRef.current?.click()}
+              className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-600 shadow-sm hover:bg-gray-50"
+            >
+              🔍 Inspect a DST/PES/JEF/EXP file
+            </button>
+            <input
+              ref={inspectInputRef}
+              type="file"
+              accept=".dst,.pes,.jef,.exp"
+              className="hidden"
+              onChange={async (e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (!f) return;
+                setError(null);
+                try {
+                  const r = await api.inspectFile(f);
+                  setResult(r);
+                  setInspectedName(f.name);
+                  digitizedOnce.current = false; // don't auto-overwrite
+                } catch (err) {
+                  setError((err as Error).message);
+                }
+              }}
+            />
+          </div>
           {result ? (
             <>
               <StitchPreview result={result} />
