@@ -236,6 +236,58 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
     occupied = (label_map >= 0).astype(np.uint8)
     stitched = np.zeros_like(occupied)
 
+    # Burying pass: detail islands of later colors that sit on the base
+    # fill stitch FIRST, connected by free travel runs — the base fill
+    # then stitches over those runs and buries them (pro technique).
+    # Costs one extra color change, saves an island's trim each.
+    buried_ids: set = set()
+    islands_excl = None
+    if len(entries) >= 2:
+        f_idx, f_rgb, f_regs, f_cs, f_major, _ = entries[0]
+        f_eff = f_cs.stitch if f_cs is not None and f_cs.stitch != "auto" \
+            else f_major
+        if f_eff == "fill":
+            f_mask_raw = (label_map == f_idx).astype(np.uint8)
+            r_px = max(1, int(round(1.4 / max(mm_per_px, 1e-9))))
+            kern = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (2 * r_px + 1, 2 * r_px + 1))
+            f_merged = (cv2.morphologyEx(f_mask_raw, cv2.MORPH_CLOSE, kern)
+                        & occupied).astype(np.uint8)
+            ring_k = np.ones((5, 5), np.uint8)
+            island_jobs = []
+            for ei in range(1, len(entries)):
+                for r in entries[ei][2]:
+                    if r.bbox_px * mm_per_px > 20:
+                        continue
+                    ring = (cv2.dilate(r.mask, ring_k) > 0) & (r.mask == 0)
+                    if ring.any() and float(f_merged[ring].mean()) > 0.6:
+                        island_jobs.append((ei, r))
+            if len(island_jobs) >= 3:
+                from collections import defaultdict
+                by_color = defaultdict(list)
+                for ei, r in island_jobs:
+                    by_color[ei].append(r)
+                    buried_ids.add(id(r))
+                islands_mask = np.zeros_like(occupied)
+                for ei, regs_i in by_color.items():
+                    idx_c, rgb_c, _, cs_c, _, _ = entries[ei]
+                    c_mask = (label_map == idx_c).astype(np.uint8)
+                    builder.start_color(_hex(rgb_c))
+                    builder.travel_router = _make_travel_router(
+                        (f_merged | c_mask).astype(np.uint8), sx, sy,
+                        s.stitch_len_mm)
+                    for r in _order_regions(regs_i, builder, sx, sy):
+                        st = cs_c.stitch if cs_c is not None else "auto"
+                        if st == "auto":
+                            st = regions.suggest_stitch(
+                                r, mm_per_px, s.satin_width_mm)
+                        _stitch_region(builder, r, st, s, sx, sy, mm_per_px)
+                        islands_mask |= r.mask
+                    builder.travel_router = None
+                excl_px = max(1, int(round(0.3 / max(mm_per_px, 1e-9))))
+                islands_excl = cv2.dilate(
+                    islands_mask, np.ones((2 * excl_px + 1,) * 2, np.uint8))
+
     for idx, rgb_c, regs, cs, major, _ in entries:
         color_mask = (label_map == idx).astype(np.uint8)
         effective = cs.stitch if cs is not None and cs.stitch != "auto" \
@@ -253,15 +305,20 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
                 regs = merged_regs
         stitched |= color_mask
 
+        regs = [r for r in regs if id(r) not in buried_ids]
+        if not regs:
+            continue
         builder.start_color(_hex(rgb_c))
         builder.travel_router = _make_travel_router(
             color_mask, sx, sy, s.stitch_len_mm)
         regs = _order_regions(regs, builder, sx, sy)
+        excl = islands_excl if idx == entries[0][0] else None
         for r in regs:
             stitch = cs.stitch if cs is not None else "auto"
             if stitch == "auto":
                 stitch = regions.suggest_stitch(r, mm_per_px, s.satin_width_mm)
-            _stitch_region(builder, r, stitch, s, sx, sy, mm_per_px)
+            _stitch_region(builder, r, stitch, s, sx, sy, mm_per_px,
+                           exclude=excl)
         builder.travel_router = None
 
 
@@ -347,7 +404,8 @@ def _order_regions(regs, builder: PlanBuilder, sx: float, sy: float):
 
 
 def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
-                   sx: float, sy: float, mm_per_px: float) -> None:
+                   sx: float, sy: float, mm_per_px: float,
+                   exclude=None) -> None:
     if stitch == "running":
         polys_mm = fills.contour_paths_mm(r.polys, sx, sy)
         for poly in polys_mm:
@@ -363,10 +421,10 @@ def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
         thin_frac = float(thin_mask.sum()) / max(float(r.mask.sum()), 1.0)
         thin_area_mm2 = float(thin_mask.sum()) * mm_per_px * mm_per_px
         if thin_frac >= 0.35 and thin_area_mm2 >= 10.0:
-            _fill_mask(builder, blob_mask, s, sx, sy, mm_per_px)
+            _fill_mask(builder, blob_mask, s, sx, sy, mm_per_px, exclude)
             _satin_network(builder, thin_mask, s, sx, sy, mm_per_px)
         else:
-            _fill_mask(builder, r.mask, s, sx, sy, mm_per_px)
+            _fill_mask(builder, r.mask, s, sx, sy, mm_per_px, exclude)
         return
 
     if stitch == "satin":
@@ -375,7 +433,7 @@ def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
         stitch = "fill"  # fallback when no usable centerline found
 
     if stitch == "fill":
-        _fill_mask(builder, r.mask, s, sx, sy, mm_per_px)
+        _fill_mask(builder, r.mask, s, sx, sy, mm_per_px, exclude)
 
 
 def _split_thick_blobs(mask: np.ndarray, s: Settings, mm_per_px: float):
@@ -436,14 +494,19 @@ def _satin_network(builder: PlanBuilder, mask: np.ndarray, s: Settings,
 
 
 def _fill_mask(builder: PlanBuilder, mask: np.ndarray, s: Settings,
-               sx: float, sy: float, mm_per_px: float) -> None:
+               sx: float, sy: float, mm_per_px: float,
+               exclude=None) -> None:
     """Tatami-fill a mask: expand slightly under neighbors so no fabric
     shows between adjacent colors, angle along the shape's long axis,
-    underlay first, then top stitching."""
+    underlay first, then top stitching. `exclude` marks already-stitched
+    detail islands the fill must stay off of."""
     overlap_px = max(1, int(round(0.35 / max(mm_per_px, 1e-6))))
     kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE, (2 * overlap_px + 1, 2 * overlap_px + 1))
     dil = cv2.dilate(mask, kernel)
+    if exclude is not None:
+        dil = dil.copy()
+        dil[exclude > 0] = 0
     contours, _ = cv2.findContours(dil, cv2.RETR_CCOMP,
                                    cv2.CHAIN_APPROX_SIMPLE)
     polys = []
