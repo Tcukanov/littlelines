@@ -366,7 +366,8 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
                         if st == "auto":
                             st = regions.suggest_stitch(
                                 r, mm_per_px, s.satin_width_mm)
-                        _stitch_region(builder, r, st, s, sx, sy, mm_per_px)
+                        _stitch_region(builder, r, st, s, sx, sy, mm_per_px,
+                                       allowed=occupied)
                         islands_mask |= r.mask
                     builder.travel_router = None
                     prepass_ranges.setdefault(idx_c, []).append(
@@ -421,7 +422,7 @@ def _digitize_colors(builder: PlanBuilder, rgb, fg, s: Settings,
             if stitch == "auto":
                 stitch = regions.suggest_stitch(r, mm_per_px, s.satin_width_mm)
             _stitch_region(builder, r, stitch, s, sx, sy, mm_per_px,
-                           exclude=excl)
+                           exclude=excl, allowed=occupied)
         # Verify coverage of this color (incl. buried pre-pass islands) and
         # patch anything the generators missed.
         slices = [builder.plan.events[a:b]
@@ -568,7 +569,7 @@ def _order_regions(regs, builder: PlanBuilder, sx: float, sy: float):
 
 def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
                    sx: float, sy: float, mm_per_px: float,
-                   exclude=None) -> None:
+                   exclude=None, allowed=None) -> None:
     if stitch == "running":
         polys_mm = fills.contour_paths_mm(r.polys, sx, sy)
         for poly in polys_mm:
@@ -592,10 +593,12 @@ def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
         thin_frac = float(thin_mask.sum()) / max(float(r.mask.sum()), 1.0)
         thin_area_mm2 = float(thin_mask.sum()) * mm_per_px * mm_per_px
         if thin_frac >= 0.35 and thin_area_mm2 >= 10.0:
-            _fill_mask(builder, blob_mask, s, sx, sy, mm_per_px, exclude)
+            _fill_mask(builder, blob_mask, s, sx, sy, mm_per_px, exclude,
+                       allowed)
             _satin_network(builder, thin_mask, s, sx, sy, mm_per_px)
         else:
-            _fill_mask(builder, r.mask, s, sx, sy, mm_per_px, exclude)
+            _fill_mask(builder, r.mask, s, sx, sy, mm_per_px, exclude,
+                       allowed)
         return
 
     if stitch == "satin":
@@ -604,7 +607,7 @@ def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
         stitch = "fill"  # fallback when no usable centerline found
 
     if stitch == "fill":
-        _fill_mask(builder, r.mask, s, sx, sy, mm_per_px, exclude)
+        _fill_mask(builder, r.mask, s, sx, sy, mm_per_px, exclude, allowed)
 
 
 def _split_thick_blobs(mask: np.ndarray, s: Settings, mm_per_px: float):
@@ -669,7 +672,7 @@ def _satin_network(builder: PlanBuilder, mask: np.ndarray, s: Settings,
 
 def _fill_mask(builder: PlanBuilder, mask: np.ndarray, s: Settings,
                sx: float, sy: float, mm_per_px: float,
-               exclude=None) -> None:
+               exclude=None, allowed=None) -> None:
     """Tatami-fill a mask: expand slightly under neighbors so no fabric
     shows between adjacent colors, angle along the shape's long axis,
     underlay first, then top stitching. `exclude` marks already-stitched
@@ -678,6 +681,10 @@ def _fill_mask(builder: PlanBuilder, mask: np.ndarray, s: Settings,
     kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE, (2 * overlap_px + 1, 2 * overlap_px + 1))
     dil = cv2.dilate(mask, kernel)
+    if allowed is not None:
+        # Only grow under territory another color will stitch over. Growing
+        # into bare fabric would shrink holes (letter counters, highlights).
+        dil = (dil & (allowed | mask)).astype(np.uint8)
     if exclude is not None:
         dil = dil.copy()
         dil[exclude > 0] = 0
