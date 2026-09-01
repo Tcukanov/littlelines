@@ -108,8 +108,11 @@ def suggest_stitch(region: Region, mm_per_px: float,
     if region.bbox_px * mm_per_px <= 6.0:
         return "fill"
     # Satin only for genuinely stroke-like shapes; compact blobs look far
-    # better as small tatami fills than as fat zigzag "beads". Allow a 25%
-    # tolerance over the cap so lettering strokes don't get chopped up.
-    if typ_th <= satin_max_mm * 1.25 and elongation >= 2.2:
+    # better as small tatami fills than as fat zigzag "beads".
+    # The width setting is a preference, but a NARROW stroke must never be
+    # tatami-filled — hatching a 2mm letter stem looks broken. Satin is
+    # physically fine up to ~6mm, so allow that for stroke-like shapes.
+    effective_max = max(satin_max_mm * 1.25, min(6.0, typ_th))
+    if typ_th <= effective_max and elongation >= 2.2:
         return "satin"
     return "fill"

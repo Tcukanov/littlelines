@@ -638,8 +638,14 @@ def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
 def _split_thick_blobs(mask: np.ndarray, s: Settings, mm_per_px: float):
     """Return (thin_mask, blob_mask|None): blobs = areas wider than the
     satin cap, reconstructed from the distance-transform core."""
-    thr_px = (s.satin_width_mm / 2.0) / max(mm_per_px, 1e-9)
+    # Effective cap: a narrow stroke stays satin even when the slider is
+    # set low — hatching a 2mm letter stem looks broken.
     dt = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+    inner_all = dt[mask > 0]
+    typ_mm = (2.0 * float(np.percentile(inner_all, 85)) * mm_per_px
+              if inner_all.size else 0.0)
+    eff_cap = max(s.satin_width_mm, min(6.0, typ_mm))
+    thr_px = (eff_cap / 2.0) / max(mm_per_px, 1e-9)
     core = (dt > thr_px * 1.3).astype(np.uint8)
     if not core.any():
         return mask, None
@@ -655,6 +661,13 @@ def _split_thick_blobs(mask: np.ndarray, s: Settings, mm_per_px: float):
         if stats[ci][4] >= min_blob_px:
             keep[comp == ci] = 1
     if not keep.any():
+        return mask, None
+    # A letter's stem/bar junction is momentarily thicker than the strokes.
+    # Splitting there carves out a patch that gets tatami-filled at a
+    # global angle — visible as stripes across the letter. Only split when
+    # the thick part is a genuine area, not a junction bulge.
+    blob_mm2 = float(keep.sum()) * mm_per_px * mm_per_px
+    if keep.sum() < 0.20 * mask.sum() and blob_mm2 < 150.0:
         return mask, None
     thin = mask.copy()
     thin[keep > 0] = 0
@@ -686,8 +699,9 @@ def _satin_network(builder: PlanBuilder, mask: np.ndarray, s: Settings,
                 builder.add_run(run)
             emitted = emitted or not retrace
             continue
-        w_arr = np.clip(widths_px * mm_per_px + 2 * s.pull_comp_mm,
-                        0.8, s.satin_width_mm)
+        cap = max(s.satin_width_mm, min(6.0, float(
+            np.percentile(widths_px, 85) * mm_per_px)))
+        w_arr = np.clip(widths_px * mm_per_px + 2 * s.pull_comp_mm, 0.8, cap)
         run = _satin_run(path_mm, w_arr, s)
         if run is not None:
             builder.add_run(run)
