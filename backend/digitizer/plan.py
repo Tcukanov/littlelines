@@ -145,6 +145,13 @@ class PlanBuilder:
         if stitches > 120000:
             warnings.append(f"Very high stitch count ({stitches:,}); consider "
                             "a smaller size or lower density.")
+        jumps = sum(1 for e in plan.events if e[0] == CMD_JUMP)
+        trims = sum(1 for e in plan.events if e[0] == CMD_TRIM)
+        if not self.trim_enabled and jumps > 30:
+            warnings.append(
+                f"Trims are OFF but the design has {jumps} jumps — the "
+                "machine will drag loose threads across the design between "
+                "shapes. Turn 'Trim between objects' ON.")
         if width > 360 or height > 360:
             warnings.append("Design exceeds 360 mm and will not fit most hoops.")
         elif width > 180 or height > 180:
