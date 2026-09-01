@@ -597,8 +597,12 @@ def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
                        allowed)
             _satin_network(builder, thin_mask, s, sx, sy, mm_per_px)
         else:
-            _fill_mask(builder, r.mask, s, sx, sy, mm_per_px, exclude,
-                       allowed)
+            elong0 = r.area_px / max(r.p85_thickness_px ** 2, 1.0)
+            if not (elong0 >= 4.0 and r.bbox_px * mm_per_px > 25.0
+                    and _stroke_fill(builder, r.mask, s, sx, sy, mm_per_px,
+                                     exclude, allowed)):
+                _fill_mask(builder, r.mask, s, sx, sy, mm_per_px, exclude,
+                           allowed)
         return
 
     if stitch == "satin":
@@ -607,6 +611,11 @@ def _stitch_region(builder: PlanBuilder, r, stitch: str, s: Settings,
         stitch = "fill"  # fallback when no usable centerline found
 
     if stitch == "fill":
+        elong = r.area_px / max(r.p85_thickness_px ** 2, 1.0)
+        if elong >= 4.0 and r.bbox_px * mm_per_px > 25.0:
+            if _stroke_fill(builder, r.mask, s, sx, sy, mm_per_px,
+                            exclude, allowed):
+                return
         _fill_mask(builder, r.mask, s, sx, sy, mm_per_px, exclude, allowed)
 
 
@@ -670,9 +679,88 @@ def _satin_network(builder: PlanBuilder, mask: np.ndarray, s: Settings,
     return emitted
 
 
+def _stroke_fill(builder: PlanBuilder, mask: np.ndarray, s: Settings,
+                 sx: float, sy: float, mm_per_px: float,
+                 exclude=None, allowed=None) -> bool:
+    """Fill a long stroke in short bands whose rows run across it, so the
+    stitching follows the stroke's direction instead of cutting it at one
+    global angle (which staircases along diagonal and curved edges)."""
+    import math
+
+    paths = lineart.centerline_paths(mask, min_len_px=4.0)
+    if not paths:
+        return False
+    seg_px = max(8.0, 12.0 / max(mm_per_px, 1e-9))  # ~12mm bands
+    reach = float(max(mask.shape)) * 1.5
+    done = np.zeros_like(mask)
+    emitted = False
+    # One underlay for the whole stroke; bands would each add their own.
+    if s.underlay:
+        _underlay_only(builder, mask, s, sx, sy, mm_per_px)
+    import dataclasses
+    s_band = dataclasses.replace(s, underlay=False)
+
+    for pts_px, _w, retrace in lineart.graph_walk(paths):
+        if retrace:
+            continue
+        path = fills.resample_path(pts_px, seg_px)
+        if len(path) < 2:
+            continue
+        for i in range(len(path) - 1):
+            p0, p1 = path[i], path[i + 1]
+            d = p1 - p0
+            n = float(np.hypot(d[0], d[1]))
+            if n < 1e-6:
+                continue
+            ux, uy = d[0] / n, d[1] / n
+            px_, py_ = -uy, ux           # perpendicular
+            # Band: the slab between the two cut lines, widened to cover
+            # the stroke, clipped to the region and to what is left.
+            a0 = (p0[0] - ux * 0.5 + px_ * reach, p0[1] - uy * 0.5 + py_ * reach)
+            a1 = (p0[0] - ux * 0.5 - px_ * reach, p0[1] - uy * 0.5 - py_ * reach)
+            b1 = (p1[0] + ux * 0.5 - px_ * reach, p1[1] + uy * 0.5 - py_ * reach)
+            b0 = (p1[0] + ux * 0.5 + px_ * reach, p1[1] + uy * 0.5 + py_ * reach)
+            quad = np.array([a0, a1, b1, b0], np.int32)
+            band = np.zeros_like(mask)
+            cv2.fillPoly(band, [quad], 1)
+            band = (band & mask & (1 - done)).astype(np.uint8)
+            if band.sum() < 4:
+                continue
+            done |= band
+            # Rows run across the stroke: perpendicular to the tangent.
+            angle = math.degrees(math.atan2(uy, ux)) + 90.0
+            _fill_mask(builder, band, s_band, sx, sy, mm_per_px, exclude,
+                       allowed, angle_deg=angle)
+            emitted = True
+
+    leftover = (mask & (1 - done)).astype(np.uint8)
+    if emitted and leftover.sum() * mm_per_px * mm_per_px > 2.0:
+        _fill_mask(builder, leftover, s_band, sx, sy, mm_per_px, exclude,
+                   allowed)
+    return emitted
+
+
+def _underlay_only(builder: PlanBuilder, mask: np.ndarray, s: Settings,
+                   sx: float, sy: float, mm_per_px: float) -> None:
+    contours, _ = cv2.findContours(mask, cv2.RETR_CCOMP,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+    polys = []
+    for c in contours:
+        ap = cv2.approxPolyDP(c, 1.0, True).reshape(-1, 2)
+        if ap.shape[0] >= 3:
+            polys.append(ap.astype(np.float64))
+    if not polys:
+        return
+    polys_mm = fills.contour_paths_mm(polys, sx, sy)
+    angle = _region_angle(mask, default=s.fill_angle_deg) + 90.0
+    for run in fills.scanline_fill(polys_mm, angle, spacing=2.5,
+                                   stitch_len=3.5, pull_comp=0.0, inset=0.4):
+        builder.add_run(run)
+
+
 def _fill_mask(builder: PlanBuilder, mask: np.ndarray, s: Settings,
                sx: float, sy: float, mm_per_px: float,
-               exclude=None, allowed=None) -> None:
+               exclude=None, allowed=None, angle_deg=None) -> None:
     """Tatami-fill a mask: expand slightly under neighbors so no fabric
     shows between adjacent colors, angle along the shape's long axis,
     underlay first, then top stitching. `exclude` marks already-stitched
@@ -700,7 +788,9 @@ def _fill_mask(builder: PlanBuilder, mask: np.ndarray, s: Settings,
     polys_mm = fills.contour_paths_mm(polys, sx, sy)
 
     angle = s.fill_angle_deg
-    if s.auto_fill_angle:
+    if angle_deg is not None:
+        angle = angle_deg
+    elif s.auto_fill_angle:
         angle = _region_angle(mask, default=s.fill_angle_deg)
     # Within ONE fill region, short hops (around interior holes) may drag
     # thread instead of trimming: the holes belong to other colors that
