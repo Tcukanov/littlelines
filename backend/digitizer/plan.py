@@ -67,12 +67,18 @@ class PlanBuilder:
         if self.pos is not None:
             gap = float(np.linalg.norm(pts[0] - self.pos))
             if gap > 0.8:
-                if self.trim_enabled and gap > self.trim_threshold:
-                    self._lock(self.pos)  # tie-off before the cut
-                    self.plan.events.append(
-                        (CMD_TRIM, float(self.pos[0]), float(self.pos[1])))
-                    self._needs_tie_in = True
-                self._emit_move(CMD_JUMP, pts[0], self.max_jump)
+                if gap <= 2.5:
+                    # Walk stitches instead of a jump: a short connector is
+                    # invisible but saves a full machine stop/start cycle.
+                    self._emit_move(CMD_STITCH, pts[0], self.max_stitch)
+                else:
+                    if self.trim_enabled and gap > self.trim_threshold:
+                        self._lock(self.pos)  # tie-off before the cut
+                        self.plan.events.append(
+                            (CMD_TRIM, float(self.pos[0]),
+                             float(self.pos[1])))
+                        self._needs_tie_in = True
+                    self._emit_move(CMD_JUMP, pts[0], self.max_jump)
         if self._needs_tie_in:
             self._lock(pts[0])  # tie-in: anchor the new thread start
             self.pos = pts[0]
@@ -120,7 +126,10 @@ class PlanBuilder:
         jumps = sum(1 for e in plan.events if e[0] == CMD_JUMP)
         trims = sum(1 for e in plan.events if e[0] == CMD_TRIM)
         changes = sum(1 for e in plan.events if e[0] == CMD_COLOR_CHANGE)
-        minutes = stitches / 700.0 + trims * 3 / 60.0 + changes * 20 / 60.0
+        # Realistic machine time: jumps and trims dominate stroke-heavy
+        # designs (frame creep + stop/cut/restart cycles), not stitches.
+        minutes = (stitches / 700.0 + jumps * 1.2 / 60.0
+                   + trims * 5 / 60.0 + changes * 20 / 60.0)
 
         stats = {
             "stitches": stitches,
