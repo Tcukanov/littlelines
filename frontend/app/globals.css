@@ -1,0 +1,7 @@
+@import url("https://fonts.googleapis.com/css2?family=Graduate&family=Alfa+Slab+One&family=Luckiest+Guy&family=Lobster&display=swap");
+@import "tailwindcss";
+
+body {
+  background: #f5f6f8;
+  color: #1f2430;
+}
