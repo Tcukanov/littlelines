@@ -221,6 +221,9 @@ export default function Home() {
         ...(meta.recommendedWidthMm
           ? { width_mm: Math.max(s.width_mm, meta.recommendedWidthMm) }
           : {}),
+        ...(meta.satinWidthMm
+          ? { satin_width_mm: Math.max(s.satin_width_mm, meta.satinWidthMm) }
+          : {}),
       }));
     },
     [swapFile],

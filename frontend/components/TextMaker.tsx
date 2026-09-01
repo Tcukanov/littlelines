@@ -5,13 +5,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export interface TextMeta {
   recommendedWidthMm?: number;
   singleColor: boolean;
+  satinWidthMm?: number;
 }
 
 interface Props {
   onFile: (file: File, meta: TextMeta) => void;
 }
 
+// Connected script fonts stitch as ONE continuous shape per word — the
+// low-jump lettering style professional embroidery designs use.
 const FONTS = [
+  "Pacifico",
+  "Yellowtail",
+  "Dancing Script",
+  "Great Vibes",
   "Graduate",
   "Alfa Slab One",
   "Luckiest Guy",
@@ -170,9 +177,15 @@ export default function TextMaker({ onFile }: Props) {
   // the varsity inline channel (0.03 × SIZE px) — is still ≥ 0.75 mm.
   const recommendedWidth = useCallback(() => {
     const c = canvasRef.current;
-    if (!c || !outline) return undefined;
-    const mmPerPx = 0.75 / (SIZE * 0.03);
-    return Math.min(280, Math.ceil((c.width * mmPerPx) / 5) * 5);
+    if (!c) return undefined;
+    if (outline) {
+      const mmPerPx = 0.75 / (SIZE * 0.03);
+      return Math.min(280, Math.ceil((c.width * mmPerPx) / 5) * 5);
+    }
+    // Plain lettering: professional designs run letters 25 mm+ tall so
+    // strokes become plump wide satin. Recommend a width that gets there.
+    const w = (25 * c.width) / Math.max(c.height, 1);
+    return Math.max(60, Math.min(260, Math.ceil(w / 5) * 5));
   }, [outline]);
 
   const use = useCallback(() => {
@@ -188,6 +201,7 @@ export default function TextMaker({ onFile }: Props) {
       onFile(new File([blob], `${safe}.png`, { type: "image/png" }), {
         recommendedWidthMm: recommendedWidth(),
         singleColor: true,
+        satinWidthMm: 7, // lettering strokes stay satin, not fill
       });
     }, "image/png");
   }, [onFile, text, recommendedWidth]);
@@ -288,7 +302,7 @@ export default function TextMaker({ onFile }: Props) {
       <p className="text-center text-xs text-gray-400">
         {outline
           ? "Varsity outline has fine details — the width in step 2 is set automatically to the minimum stitchable size."
-          : "For the classic athletic look: font “Graduate” + Varsity outline + some arch. Keep letters at least ~15 mm tall in step 2."}
+          : "Tip: script fonts (Pacifico, Yellowtail…) connect the letters, so a word stitches as ONE piece with almost no jumps — the professional embroidery lettering style. Block fonts need one stop per letter."}
       </p>
     </div>
   );

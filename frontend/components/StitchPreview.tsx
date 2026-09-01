@@ -100,10 +100,14 @@ export default function StitchPreview({ result }: Props) {
       }
       if (hasThread) {
         ctx.strokeStyle = "rgba(25, 25, 35, 0.35)";
-        ctx.lineWidth = Math.max(1.6, scale * 0.5);
+        ctx.lineWidth = Math.max(1.8, scale * 0.55);
         ctx.stroke(thread);
         ctx.strokeStyle = color;
-        ctx.lineWidth = Math.max(1, scale * 0.36);
+        ctx.lineWidth = Math.max(1.2, scale * 0.42);
+        ctx.stroke(thread);
+        // Sheen: a lighter core line makes thread look round and glossy.
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.28)";
+        ctx.lineWidth = Math.max(0.6, scale * 0.14);
         ctx.stroke(thread);
         thread = new Path2D();
         hasThread = false;
